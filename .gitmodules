@@ -1,0 +1,6 @@
+[submodule "external/lwsf"]
+	path = external/lwsf
+	url = https://github.com/vtnerd/lwsf.git
+[submodule "external/ftxui"]
+	path = external/ftxui
+	url = https://github.com/ArthurSonzogni/FTXUI.git
