@@ -30,5 +30,5 @@ set(lwcli-views_sources history.cpp keys.cpp manager.cpp wallet.cpp)
 set(lwscli-views_headers history.h keys.h manager.h wallet.h)
 
 add_library(lwcli-views ${lwcli-views_sources} ${lwcli-views_headers})
-target_link_libraries(lwcli-views PRIVATE dom lwcli-decorate lwsf-api)
+target_link_libraries(lwcli-views PRIVATE component dom lwcli-decorate lwsf-api)
 
