@@ -58,11 +58,21 @@ namespace lwcli { namespace view
       }
     };
 
-    ftxui::Component password(std::string* pass)
+    std::string get_home()
+    {
+      const char* home = std::getenv("HOME");
+      if (home)
+        return home;
+      return {};
+    }
+
+    ftxui::Component password(std::string* pass, std::function<void()> on_enter = nullptr)
     {
       auto opt = ftxui::InputOption::Default();
       opt.password = true;
       opt.multiline = false;
+      if (on_enter)
+        opt.on_enter = std::move(on_enter);
       return ftxui::Input(pass, std::move(opt));
     }
 
@@ -94,13 +104,9 @@ namespace lwcli { namespace view
       std::string file;
       std::string password;
 
-      wallet_base()
-        : file(), password()
-      {
-        const char* home = std::getenv("HOME");
-        if (home)
-          file = home;
-      }
+      wallet_base(std::string default_file)
+        : file(std::move(default_file)), password()
+      {}
     };
 
     struct new_wallet : wallet_base
@@ -111,8 +117,8 @@ namespace lwcli { namespace view
       std::string proxy;
       bool ssl;
 
-      new_wallet()
-        : wallet_base(), confirm(), language(config::default_language), server(config::server::default_url), proxy(), ssl(false)
+      new_wallet(std::string default_file)
+        : wallet_base(std::move(default_file)), confirm(), language(config::default_language), server(config::server::default_url), proxy(), ssl(false)
       {}
 
       void setup(Monero::Wallet& wal)
@@ -136,7 +142,7 @@ namespace lwcli { namespace view
       {}
     };
 
-    std::optional<std::uint64_t> from_string(const std::string& str) noexcept
+    std::optional<std::uint64_t> from_string(const std::string_view str) noexcept
     {
       std::uint64_t height = 0;
       const auto end = str.data() + str.size();
@@ -159,57 +165,63 @@ namespace lwcli { namespace view
 
       if (!wal.init(wal.getCacheAttribute(std::string{config::server::url}), 0, "", "", *ssl, true, wal.getCacheAttribute(std::string{config::server::proxy})))
       {
-        *error = wal.errorString();
+        *error = "Failure to initialize" + wal.errorString();
         return false;
       }
       return true;
     }
 
-    std::pair<std::vector<std::pair<ftxui::Element, ftxui::Component>>, ftxui::Component> get_load_options(start_state* state)
+    using option_set = std::pair<std::vector<std::pair<ftxui::Element, ftxui::Component>>, ftxui::Component>;
+
+    option_set get_load_options(std::string default_file, start_state* state)
     {
       struct options
       {
         start_state* state;
         wallet_base config;
 
-        options(start_state* state)
-          : state(state), config()
+        options(std::string default_file, start_state* state)
+          : state(state), config(std::move(default_file))
         {}
       };
-      auto enclosed = std::make_shared<options>(state);
-      auto load = ftxui::Button("Load", [enclosed] () {
+      auto enclosed = std::make_shared<options>(std::move(default_file), state); 
+      const auto load_action = [enclosed] () {
         auto prepped = prep_wallet(
           enclosed->state->wm,
-          enclosed->state->wm->openWallet(enclosed->config.file, enclosed->config.password, Monero::TESTNET),
+          enclosed->state->wm->openWallet(enclosed->config.file, enclosed->config.password, config::network),
           &enclosed->state->error
         );
         if (prepped)
         {
-          enclosed->config.password.clear();
-          init_wallet(*prepped, &enclosed->state->error);
-          enclosed->state->wal = prepped;
+          if (init_wallet(*prepped, &enclosed->state->error))
+          {
+            enclosed->config.password.clear();
+            prepped->startRefresh();
+            enclosed->state->wal = prepped;
+          }
         }
-      }, ftxui::ButtonOption::Ascii());
+      };
+
       return {
         {
           {ftxui::text(_("Filename: ")), last_input(&enclosed->config.file)},
-          {ftxui::text(_("Password: ")), password(&enclosed->config.password)}
+          {ftxui::text(_("Password: ")), password(&enclosed->config.password, load_action)}
         },
-        load
+        ftxui::Button(_("Load"), load_action, ftxui::ButtonOption::Ascii())
       };
     }
-    std::pair<std::vector<std::pair<ftxui::Element, ftxui::Component>>, ftxui::Component> get_create_options(start_state* state)
+    option_set get_create_options(std::string default_file, start_state* state)
     {
       struct options
       {
         start_state* state;
         new_wallet config;
 
-        options(start_state* state)
-          : state(state), config()
+        options(std::string default_file, start_state* state)
+          : state(state), config(std::move(default_file))
         {}
       };
-      auto enclosed = std::make_shared<options>(state);
+      auto enclosed = std::make_shared<options>(std::move(default_file), state);
       auto create = ftxui::Button("Create", [enclosed] () {
         if (!enclosed->config.file.empty())
         {
@@ -223,19 +235,21 @@ namespace lwcli { namespace view
           {
             auto prepped = prep_wallet(
               enclosed->state->wm,
-              enclosed->state->wm->createWallet(enclosed->config.file, enclosed->config.password, enclosed->config.language, Monero::TESTNET),
+              enclosed->state->wm->createWallet(enclosed->config.file, enclosed->config.password, enclosed->config.language, config::network),
               &enclosed->state->error
             );
             if (prepped)
             {
               if (prepped->store({}))
               {
-                enclosed->config.password.clear();
-                enclosed->config.confirm.clear();
                 enclosed->config.setup(*prepped);
-                init_wallet(*prepped, &enclosed->state->error);
-                enclosed->state->overlay = view::keys(prepped, true /* show warning */);
-                enclosed->state->wal = prepped;
+                if (init_wallet(*prepped, &enclosed->state->error))
+                {
+                  enclosed->config.password.clear();
+                  enclosed->config.confirm.clear();
+                  enclosed->state->overlay = view::keys(prepped, true /* show warning */);
+                  enclosed->state->wal = prepped;
+                }
               }
               else
                 enclosed->state->error = "Unable to create file: " + prepped->errorString();
@@ -253,14 +267,14 @@ namespace lwcli { namespace view
           {ftxui::text(_("Password: ")), password(&enclosed->config.password)},
           {ftxui::text(_("Confirm: ")), password(&enclosed->config.confirm)},
           {ftxui::text(_("Language: ")), last_input(&enclosed->config.language)},
-          {ftxui::text(_("LWS Server: ")), last_input(&enclosed->config.server)},
+          {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Server Options: ")), ftxui::Checkbox(_("SSL"), &enclosed->config.ssl)}
+          {ftxui::text(_("Options: ")), ftxui::Checkbox(_("TLS/SSL Cert Check"), &enclosed->config.ssl)}
         },
         create
       };
     }
-    std::pair<std::vector<std::pair<ftxui::Element, ftxui::Component>>, ftxui::Component> get_seed_options(start_state* state)
+    option_set get_seed_options(std::string default_file, start_state* state)
     {
       struct options
       {
@@ -269,11 +283,11 @@ namespace lwcli { namespace view
         std::string height;
         new_wallet config;
 
-        options(start_state* state)
-          : state(state), mnemonic(), height("0"), config()
+        options(std::string default_file, start_state* state)
+          : state(state), mnemonic(), height("0"), config(std::move(default_file))
         {}
       };
-      auto enclosed = std::make_shared<options>(state);
+      auto enclosed = std::make_shared<options>(std::move(default_file), state);
       auto recover = ftxui::Button("Recover", [enclosed] () {
         const auto height = from_string(enclosed->height);
         if (!height)
@@ -294,18 +308,22 @@ namespace lwcli { namespace view
           {
             auto prepped = prep_wallet(
               enclosed->state->wm,
-              enclosed->state->wm->recoveryWallet(enclosed->config.file, enclosed->config.password, enclosed->mnemonic, Monero::TESTNET, *height),
+              enclosed->state->wm->recoveryWallet(enclosed->config.file, enclosed->config.password, enclosed->mnemonic, config::network, *height),
               &enclosed->state->error
             );
             if (prepped)
             {
               if (prepped->store({}))
               {
-                enclosed->config.password.clear();
-                enclosed->config.confirm.clear();
                 enclosed->config.setup(*prepped);
-                init_wallet(*prepped, &enclosed->state->error);
-                enclosed->state->wal = prepped;
+                if (init_wallet(*prepped, &enclosed->state->error))
+                {
+                  enclosed->mnemonic.clear();
+                  enclosed->config.password.clear();
+                  enclosed->config.confirm.clear();
+                  prepped->rescanBlockchainAsync();
+                  enclosed->state->wal = prepped;
+                }
               }
               else
                 enclosed->state->error = "Unable to create file: " + prepped->errorString();
@@ -324,15 +342,15 @@ namespace lwcli { namespace view
           {ftxui::text(_("Confirm: ")), password(&enclosed->config.confirm)},
           {ftxui::text(_("Mnemonic: ")), last_input(&enclosed->mnemonic)},
           {ftxui::text(_("Height: ")), last_input(&enclosed->height)},
-          {ftxui::text(_("LWS Server: ")), last_input(&enclosed->config.server)},
+          {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Server Options: ")), ftxui::Checkbox(_("SSL"), &enclosed->config.ssl)}
+          {ftxui::text(_("Options: ")), ftxui::Checkbox(_("TLS/SSL Cert Check"), &enclosed->config.ssl)}
         },
         recover
       };
     }
 
-    std::pair<std::vector<std::pair<ftxui::Element, ftxui::Component>>, ftxui::Component> get_key_options(start_state* state)
+    option_set get_key_options(std::string default_file, start_state* state)
     {
       struct options
       {
@@ -341,12 +359,12 @@ namespace lwcli { namespace view
         std::string height;
         new_wallet config;
 
-        options(start_state* state)
-          : state(state), spend_key(), height("0"), config()
+        options(std::string default_file, start_state* state)
+          : state(state), spend_key(), height("0"), config(std::move(default_file))
         {}
       };
-      auto enclosed = std::make_shared<options>(state);
-      auto recover = ftxui::Button("Recover (Broken)", [enclosed] () {
+      auto enclosed = std::make_shared<options>(std::move(default_file), state);
+      auto recover = ftxui::Button(_("Recover (Broken)"), [enclosed] () {
         const auto height = from_string(enclosed->height);
         if (!height)
         {
@@ -370,7 +388,7 @@ namespace lwcli { namespace view
                 enclosed->config.file,
                 enclosed->config.password,
                 enclosed->config.language,
-                Monero::TESTNET,
+                config::network,
                 *height,
                 "address",
                 "view_key",
@@ -382,11 +400,15 @@ namespace lwcli { namespace view
             {
               if (prepped->store({}))
               {
-                enclosed->config.password.clear();
-                enclosed->config.confirm.clear();
                 enclosed->config.setup(*prepped);
-                init_wallet(*prepped, &enclosed->state->error);
-                enclosed->state->wal = prepped;
+                if (init_wallet(*prepped, &enclosed->state->error))
+                {
+                  enclosed->spend_key.clear();
+                  enclosed->config.password.clear();
+                  enclosed->config.confirm.clear();
+                  prepped->rescanBlockchainAsync();
+                  enclosed->state->wal = prepped;
+                }
               }
               else
                 enclosed->state->error = "Unable to create file: " + prepped->errorString();
@@ -406,9 +428,9 @@ namespace lwcli { namespace view
           {ftxui::text(_("Spend key: ")), last_input(&enclosed->spend_key)},
           {ftxui::text(_("Height: ")), last_input(&enclosed->height)},
           {ftxui::text(_("Language: ")), last_input(&enclosed->config.language)},
-          {ftxui::text(_("LWS Server: ")), last_input(&enclosed->config.server)},
+          {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Connection Options: ")), ftxui::Checkbox(_("SSL"), &enclosed->config.ssl)}
+          {ftxui::text(_("Options: ")), ftxui::Checkbox(_("TLS/SSL Cert Check"), &enclosed->config.ssl)}
         },
         recover
       };
@@ -421,6 +443,7 @@ namespace lwcli { namespace view
       const ftxui::Element help_;
       const ftxui::Element disclaimer_;
       start_state state_;
+      const std::string default_file_;
       const std::vector<std::string> options_;
       int active_;
       int selected_;
@@ -437,16 +460,24 @@ namespace lwcli { namespace view
         return ui_; 
       }
 
+      static int get_selected(const std::string& file)
+      {
+        // default to load file if exists, and create if does not exist
+        std::error_code ec{};
+        return file.empty() || std::filesystem::exists(file, ec) ? 0 : 1;
+      }
+
     public:
-      explicit start(std::shared_ptr<Monero::WalletManager>&& wm, std::shared_ptr<Monero::Wallet>* out)
+      explicit start(std::shared_ptr<Monero::WalletManager>&& wm, std::string&& file, std::shared_ptr<Monero::Wallet>* out)
         : out_(out),
           title_(ftxui::text("wmcli")),
           help_(decorate::banner(ftxui::text(_("Ctrl-Q to close active window, Ctrl-C close app immediately")))),
           disclaimer_(decorate::banner(ftxui::text(_("Beware of mouse events in Tmux/Screen")))),
           state_(std::move(wm)),
+          default_file_(std::move(file)),
           options_({_("Load Wallet"), _("Create Wallet"), _("Recover from Seed"), _("Recover from Keys")}),
           active_(-1),
-          selected_(0),
+          selected_(get_selected(default_file_)),
           mode_(ftxui::Dropdown(&options_, &selected_)),
           completion_(),
           stack_(),
@@ -459,21 +490,22 @@ namespace lwcli { namespace view
       {
         if (active_ != selected_)
         {
+          const bool first_load = active_ == -1;
           active_ = selected_;
           switch(active_)
           {
             case 0:
             default:
-              std::tie(stack_, completion_) = get_load_options(&state_);
+              std::tie(stack_, completion_) = get_load_options((default_file_.empty() ? get_home() : default_file_), &state_);
             break;
             case 1:
-              std::tie(stack_, completion_) = get_create_options(&state_);
+              std::tie(stack_, completion_) = get_create_options((default_file_.empty() ? get_home() : default_file_), &state_);
               break;
             case 2:
-              std::tie(stack_, completion_) = get_seed_options(&state_);
+              std::tie(stack_, completion_) = get_seed_options((default_file_.empty() ? get_home() : default_file_), &state_);
               break;
             case 3:
-              std::tie(stack_, completion_) = get_key_options(&state_);
+              std::tie(stack_, completion_) = get_key_options((default_file_.empty() ? get_home() : default_file_), &state_);
               break;
           }
 
@@ -485,6 +517,15 @@ namespace lwcli { namespace view
           ui.push_back(completion_);
 
           ui_ = ftxui::Container::Vertical(std::move(ui));
+
+          // skip directly to password on init if default file given
+          if (first_load)
+          {
+            if (!default_file_.empty())
+              stack_.at(1).second->TakeFocus(); // jump to password field (load or create wallet)
+            else
+              stack_.at(0).second->TakeFocus(); // jump tp file (load wallet)
+          }
         }
 
         // Delay showing wallet if options required overlay
@@ -566,10 +607,10 @@ namespace lwcli { namespace view
       }
 
     public:
-      explicit manager_(std::shared_ptr<Monero::WalletManager>&& wm)
+      explicit manager_(std::shared_ptr<Monero::WalletManager>&& wm, std::string&& file)
         : ftxui::ComponentBase(),
           data_(nullptr),
-          start_(std::make_shared<start>(std::move(wm), &data_)),
+          start_(std::make_shared<start>(std::move(wm), std::move(file), &data_)),
           wallet_(nullptr)
       {}
 
@@ -602,10 +643,10 @@ namespace lwcli { namespace view
     };
   }
 
-  ftxui::Component manager(std::shared_ptr<Monero::WalletManager> wm)
+  ftxui::Component manager(std::shared_ptr<Monero::WalletManager> wm, std::string&& file)
   {
     if (!wm)
       throw std::runtime_error{"lwcli::view::manaager given nullptr"};
-    return std::make_shared<manager_>(std::move(wm));
+    return std::make_shared<manager_>(std::move(wm), std::move(file));
   } 
 }} // lwcli // view

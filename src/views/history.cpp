@@ -31,6 +31,8 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/table.hpp>
 #include <lws_frontend.h>
+#include <map>
+#include <unordered_map>
 
 #include "decorate/overlay.h"
 #include "events.h"
@@ -130,13 +132,13 @@ namespace lwcli { namespace view
       virtual ftxui::Element OnRender() override final
       {
         std::vector<ftxui::Elements> grid{
-          {ftxui::text("Description: "), note_input_->Render()},
+          {ftxui::text(_("Description: ")), note_input_->Render()},
           timestamp_,
           payment_id_,
-          {ftxui::text("Confirmations: "), ftxui::text(std::to_string(info_->confirmations()))},
+          {ftxui::text(_("Confirmations: ")), ftxui::text(std::to_string(info_->confirmations()))},
           amount_,
           fee_,
-          {ftxui::text("Block Height: "), ftxui::text(std::to_string(info_->blockHeight()))},
+          {ftxui::text(_("Block Height: ")), ftxui::text(std::to_string(info_->blockHeight()))},
           minors_,
           coinbase_
         };
@@ -148,7 +150,7 @@ namespace lwcli { namespace view
             std::string{_(" to Unknown Address")} : _(" to ")  + transfer.address;
           std::string text;
           if (base_size == grid.size())
-            text = "Transfers: ";
+            text = _("Transfers: ");
           grid.push_back({
             ftxui::text(std::move(text)),
             ftxui::text(print_money(transfer.amount) + address)
@@ -156,15 +158,17 @@ namespace lwcli { namespace view
         }
 
         ftxui::Elements vertical;
-        vertical.reserve(3);
+        vertical.reserve(4);
 
+        vertical.push_back(ftxui::hcenter(ftxui::hbox(cancel_->Render(), ok_->Render())));
         if (info_->isFailed())
-          vertical.push_back(ftxui::inverted(ftxui::hcenter(ftxui::text("FAILED"))));
+          vertical.push_back(ftxui::inverted(ftxui::hcenter(ftxui::text(_("FAILED")))));
         else if (info_->isPending())
-          vertical.push_back(ftxui::inverted(ftxui::hcenter(ftxui::text("PENDING"))));
+          vertical.push_back(ftxui::inverted(ftxui::hcenter(ftxui::text(_("PENDING")))));
+        else
+          vertical.push_back(ftxui::separator());
 
         vertical.push_back(ftxui::gridbox(std::move(grid)));
-        vertical.push_back(ftxui::hcenter(ftxui::hbox(cancel_->Render(), ok_->Render())));
 
         return ftxui::window(title_, ftxui::vbox(std::move(vertical)));
       }
@@ -231,8 +235,8 @@ namespace lwcli { namespace view
         }, ftxui::ButtonOption::Ascii());
 
         container_ = ftxui::Container::Vertical({
-          note_input_, 
-          ftxui::Container::Horizontal({cancel_, ok_})
+          ftxui::Container::Horizontal({cancel_, ok_}),
+          note_input_
         });
       }
     };
@@ -245,7 +249,7 @@ namespace lwcli { namespace view
       ftxui::Element table_; //!< Does not redraw when child is enabled
       std::vector<std::vector<std::string>> base_rows;
       std::ptrdiff_t highlighted_;
-      std::size_t row_count_;
+      std::unordered_map<std::size_t, int> row_map_;
       const std::uint32_t account_;
 
       static constexpr std::size_t min_row() noexcept { return 2; };
@@ -261,7 +265,7 @@ namespace lwcli { namespace view
           table_(nullptr),
           base_rows(),
           highlighted_(min_row() - 1),
-          row_count_(0),
+          row_map_(),
           account_(account)
       {
         Monero::Subaddress* subaddress = wallet_->subaddress();
@@ -294,17 +298,19 @@ namespace lwcli { namespace view
           }
           else if (event == ftxui::Event::CtrlQ)
             throw event::close{};
-          else if (event == ftxui::Event::ArrowDown && highlighted_ + 1 < row_count_)
+          else if (event.is_character())
+            return false;
+          else if (event == ftxui::Event::ArrowDown && highlighted_ < row_map_.size() + min_row() - 1)
             ++highlighted_;
           else if (event == ftxui::Event::ArrowUp && min_row() <= highlighted_)
             --highlighted_;
           else if (event == ftxui::Event::PageDown)
-            highlighted_ = std::min(std::ptrdiff_t(row_count_), highlighted_ + 10);
+            highlighted_ = std::min(std::ptrdiff_t(row_map_.size() + min_row()), highlighted_ + 10);
           else if (event == ftxui::Event::PageUp)
             highlighted_ = std::max(std::ptrdiff_t(min_row()), highlighted_ - 10);
           else if (event == ftxui::Event::Return)
           {
-            overlay_ = ftxui::Make<tx_details>(wallet_->history(), row_count_ - highlighted_ - 1);
+            overlay_ = ftxui::Make<tx_details>(wallet_->history(), row_map_.at(highlighted_ - min_row()));
             Add(overlay_);
           } 
         }
@@ -315,7 +321,7 @@ namespace lwcli { namespace view
           overlay_->Detach();
           overlay_.reset();
         }
-        return min_row() <= highlighted_ && highlighted_ < row_count_;
+        return min_row() <= highlighted_ && highlighted_ - min_row() < row_map_.size();
       }
 
       ftxui::Element OnRender() override final
@@ -324,8 +330,8 @@ namespace lwcli { namespace view
         {
           if (highlighted_ < min_row())
             highlighted_ = min_row();
-          else if (row_count_ <= highlighted_)
-            highlighted_ = row_count_ - 1;
+          else if (row_map_.size() <= highlighted_ - min_row())
+            highlighted_ = row_map_.size() - 1 + min_row();
         }
 
         /* Do not redraw table when showing tx. the 
@@ -335,33 +341,47 @@ namespace lwcli { namespace view
           Monero::TransactionHistory* tx_history = wallet_->history();
           if (!tx_history)
             throw std::runtime_error{"unexpected history nullptr"};
-     
+
+          std::map<std::pair<std::uint64_t, std::string>, std::pair<const Monero::TransactionInfo*, std::size_t>, std::greater<>> ordered;
           tx_history->refresh();
-          std::vector<std::vector<std::string>> rows = base_rows;
-
-          std::uint64_t balance = 0;
-
           const auto history = tx_history->getAll();
-          for (auto it = history.rbegin(); it != history.rend(); ++it)
+          for (std::size_t i = 0; i < history.size(); ++i)
           {
-            const Monero::TransactionInfo* tx = *it;
+            const Monero::TransactionInfo* tx = history[i];
             if (!tx)
               throw std::runtime_error{"unexpected tx_info nullptr"};
 
-            if (tx->subaddrAccount() != account_)
-              continue;
+            if (tx->subaddrAccount() == account_)
+              ordered.try_emplace({tx->blockHeight(), tx->hash()}, tx, i);
+          }
 
+          std::uint64_t balance = 0;
+          std::vector<std::vector<std::string>> rows;
+          rows.reserve(ordered.size() + 2);
+          rows = base_rows;
+
+          std::size_t i = 0;
+          row_map_.clear();
+          for (const auto& entry : ordered)
+          {
+            const Monero::TransactionInfo* tx = entry.second.first;
+            row_map_.emplace(i, entry.second.second);
+           
             const std::uint64_t amount = tx->amount();
             const int direction = tx->direction();
             const std::uint64_t fee = tx->fee();
 
-            if (direction == Monero::TransactionInfo::Direction_Out)
+          
+            if (!tx->isFailed())
             {
-              balance -= amount;
-              balance -= fee;
+              if (direction == Monero::TransactionInfo::Direction_Out)
+              {
+                balance -= amount;
+                balance -= fee;
+              }
+              else
+                balance += amount;
             }
-            else
-              balance += amount;
 
             std::tm expanded{};
             const std::time_t timestamp = tx->timestamp();
@@ -386,15 +406,16 @@ namespace lwcli { namespace view
               print_money(tx->fee()),
               tx->hash().substr(0, 16)
             });
+
+            ++i;
           }
 
-          row_count_ = rows.size();
           ftxui::Table table{std::move(rows)};
           table.SelectRow(0).Decorate(ftxui::bold);
           table.SelectRow(0).SeparatorVertical(ftxui::LIGHT);
           table.SelectRow(0).Border(ftxui::LIGHT);
-          table.SelectColumn(3).DecorateCells(ftxui::xflex_grow);
-          if (min_row() <= highlighted_ && highlighted_ < row_count_)
+          //table.SelectColumn(3).DecorateCells(ftxui::xflex_grow);
+          if (min_row() <= highlighted_ && highlighted_ - min_row() < row_map_.size())
           {
             auto row = table.SelectRow(highlighted_);
             row.Decorate(ftxui::inverted);
@@ -407,7 +428,8 @@ namespace lwcli { namespace view
           table_ = ftxui::vbox({
             title_,
             ftxui::text(_("Balance: ") + print_money(balance)),
-            ftxui::yframe(ftxui::vscroll_indicator(table.Render()))
+            table.Render() | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center | ftxui::flex
+            //ftxui::flex(ftxui::yframe(ftxui::vscroll_indicator(table.Render())))
           }); 
           return table_;
         }

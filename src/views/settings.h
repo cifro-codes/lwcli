@@ -27,13 +27,12 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #pragma once
 
-#include <cstdint>
 #include <ftxui/component/component_base.hpp>
-#include <string>
+#include <memory>
 
-namespace Monero { class WalletManager; }
+namespace Monero { class Wallet; }
 namespace lwcli { namespace view
 {
-  ftxui::Component manager(std::shared_ptr<Monero::WalletManager> wm, std::string&& file);
+  ftxui::Component settings(std::shared_ptr<Monero::Wallet> wallet);
 }} // lwscli // view
 
