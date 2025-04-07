@@ -31,8 +31,12 @@
 #include <chrono>
 #include <string_view>
 
+#include "lws_frontend.h"
+
 namespace lwcli { namespace config
 {
+  inline Monero::NetworkType network = Monero::MAINNET;
+
   constexpr const std::string_view default_language{"English"};
 
   namespace server
