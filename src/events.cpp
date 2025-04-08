@@ -26,24 +26,11 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#pragma once
-
-#include <ftxui/component/event.hpp>
-#include <stdexcept>
+#include "events.h"
 
 namespace lwcli { namespace event
 {
-  //! Thrown when a window should be closed
-  struct close final : public std::exception
-  {
-    close () noexcept
-      : std::exception()
-    {}
-
-    virtual ~close() noexcept override = default;
-    virtual const char* what() const noexcept override final { return "close window"; }
-  };
-
-  extern const ftxui::Event lock_wallet;
-
-}} // lwcli // event
+  /* Keep under 15 characters so that libstdc++ and libc++ can use small
+  string optmization. */
+  const ftxui::Event lock_wallet = ftxui::Event::Special("lwcli.lockw");
+}}

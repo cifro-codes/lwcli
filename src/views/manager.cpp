@@ -40,6 +40,7 @@
 #include "events.h"
 #include "lwcli_config.h"
 #include "translate.h"
+#include "util.h"
 #include "views/history.h"
 #include "views/keys.h"
 
@@ -141,16 +142,6 @@ namespace lwcli { namespace view
         : wm(std::move(wm)), wal(nullptr), overlay(nullptr), error()
       {}
     };
-
-    std::optional<std::uint64_t> from_string(const std::string_view str) noexcept
-    {
-      std::uint64_t height = 0;
-      const auto end = str.data() + str.size();
-      auto [ptr, ec] = std::from_chars(str.data(), end, height);
-      if (bool(ec) || ptr != end)
-        return std::nullopt;
-      return height;
-    }
 
     bool init_wallet(Monero::Wallet& wal, std::string* error)
     {
@@ -545,7 +536,9 @@ namespace lwcli { namespace view
 
         try
         {
-          if (state_.overlay)
+          if (event == event::lock_wallet)
+            state_.error = _("Wallet Locked Due to Inactivity");
+          else if (state_.overlay)
             return state_.overlay->OnEvent(std::move(event));
           else if (event == ftxui::Event::CtrlQ)
             throw event::close{};
@@ -619,8 +612,16 @@ namespace lwcli { namespace view
         try
         {
           if (wallet_)
-            return wallet_->OnEvent(std::move(event));
-          else if (start_->OnEvent(std::move(event)) && data_)
+          {
+            if (event == event::lock_wallet)
+            {
+              wallet_.reset();
+              start_->OnEvent(std::move(event));
+            }
+            else
+              return wallet_->OnEvent(std::move(event));
+          }
+          else if (event != event::lock_wallet && start_->OnEvent(std::move(event)) && data_)
             wallet_ = view::wallet(std::move(data_));
           data_.reset();
         }

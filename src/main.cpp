@@ -26,17 +26,24 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
+#include <limits>
 #include <lws_frontend.h>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include "events.h"
 #include "lwcli_config.h"
+#include "util.h"
 #include "views/manager.h"
 
 namespace
@@ -45,9 +52,10 @@ namespace
   struct program
   {
     std::string file;
+    std::chrono::seconds wallet_timeout = lwcli::config::wallet_timeout;
     rpc backend = rpc::lws;
     // network is in static memory
-    bool failed;
+    bool failed = false;
   };
 
   typedef const char**(*argument_handler)(program&, const char*[]);
@@ -125,13 +133,34 @@ namespace
 
     return ++argv;
   }
+  const char** handle_timeout(program& prog, const char* argv[])
+  {
+    if (!argv || !argv[0])
+    {
+      fprintf(stderr, "Missing argument for --timeout\n");
+      return nullptr;
+    }
+
+    const auto value = lwcli::from_string(argv[0]);
+    if (!value || std::numeric_limits<std::chrono::seconds::rep>::max() < *value)
+    {
+      fprintf(stderr, "Invalid values for --timeout\n");
+      return nullptr;
+    }
+
+    prog.wallet_timeout = std::chrono::seconds{*value};
+    return ++argv;
+  }
 
   constexpr const argument process_args[] =
   {
     {nullptr, "help", "\t\t\tList help", 'h'},
+#ifdef LWCLI_WALLET2_ENABLED
     {handle_backend, "backend", "\tlws | monerod\t\tlws = default , selects rpc backend", 'b'},
+#endif
     {handle_file, "file", "\t[file path]\t\tDefaults to home directory. Auto-fills TUI value on launch", 'f'},
     {handle_network, "network", "\tmain | stage | test\tSelects wallet network type. main is default.", 'n'},
+    {handle_timeout, "timeout", "\tseconds\tClose wallet after inactivity. Default 120", 't'}
   };
 
   template<typename F>
@@ -164,11 +193,72 @@ namespace
     ++argv;
     return current->handler(prog, argv);
   }
+
+  struct screen_state
+  {
+    std::atomic<std::chrono::steady_clock::time_point::duration::rep> last_event;
+    ftxui::ScreenInteractive screen;
+    std::mutex sync;
+    std::condition_variable notify;
+    bool shutdown;
+
+    screen_state()
+      : last_event(std::chrono::steady_clock::now().time_since_epoch().count()),
+        screen(ftxui::ScreenInteractive::Fullscreen()),
+        sync(),
+        notify(),
+        shutdown(false)
+    {}
+  };
+
+  struct watch_inactivity
+  {
+    screen_state& state;
+    std::thread watcher;
+    const std::chrono::seconds wallet_timeout;
+
+    watch_inactivity(screen_state& st, std::chrono::seconds wt)
+      : state(st), watcher(), wallet_timeout(wt)
+    {
+      watcher = std::thread([this] () {
+        std::unique_lock lock{state.sync};
+        while (!state.shutdown)
+        {
+          const std::chrono::steady_clock::time_point last_event{
+            std::chrono::steady_clock::time_point::duration{state.last_event.load()}
+          };
+
+          const auto now = std::chrono::steady_clock::now();
+          auto time_diff = now - last_event;
+          if (wallet_timeout <= time_diff)
+          {
+            state.last_event = now.time_since_epoch().count();
+            state.screen.PostEvent(lwcli::event::lock_wallet);
+            time_diff = std::chrono::seconds{0};
+          }
+
+          state.notify.wait_for(lock, (wallet_timeout - time_diff), [this] () {
+            return state.shutdown;
+          });
+        }
+      });
+    }
+
+    ~watch_inactivity() noexcept // abort if double exception
+    {
+      std::unique_lock lock{state.sync};
+      state.shutdown = true;
+      state.notify.notify_one();
+      lock.unlock();
+      if (watcher.joinable())
+        watcher.join();
+    }
+  };
 }
 
 int main(int, const char* argv[])
 {
-  auto screen = ftxui::ScreenInteractive::Fullscreen();
+  screen_state state{};
   try
   {
     if (!argv)
@@ -190,31 +280,36 @@ int main(int, const char* argv[])
       case rpc::lws:
         wm.reset(lwsf::WalletManagerFactory::getWalletManager());
         break;
+#ifdef LWCLI_WALLET2_ENABLED
       case rpc::monerod:
         wm.reset(Monero::WalletManagerFactory::getWalletManager());
+#endif
         break;
     }
 
     auto window = ftxui::CatchEvent(lwcli::view::manager(std::move(wm), std::move(prog.file)), [&] (ftxui::Event event)
     {
+      state.last_event = std::chrono::steady_clock::now().time_since_epoch().count();
       if (event == ftxui::Event::CtrlC)
       {
-        screen.ExitLoopClosure()();
+        state.screen.ExitLoopClosure()();
         return true;
       }
       return false;
     });
-    screen.Loop(window);
+
+    const watch_inactivity watch{state, prog.wallet_timeout};
+    state.screen.Loop(window);
   }
   catch (const lwcli::event::close&)
   {}
   catch (const std::exception& e)
   {
-    screen.Clear();
+    state.screen.Clear();
     fprintf(stderr, "Fatal Error: %s\n", e.what());
     return EXIT_FAILURE;
   }
  
-  screen.Clear();
+  state.screen.Clear();
   return EXIT_SUCCESS;  
 }

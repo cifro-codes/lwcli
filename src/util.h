@@ -28,22 +28,21 @@
 
 #pragma once
 
-#include <ftxui/component/event.hpp>
-#include <stdexcept>
+#include <charconv>
+#include <cstdint>
+#include <optional>
+#include <string_view>
 
-namespace lwcli { namespace event
+
+namespace lwcli
 {
-  //! Thrown when a window should be closed
-  struct close final : public std::exception
+  inline std::optional<std::uint64_t> from_string(const std::string_view str) noexcept
   {
-    close () noexcept
-      : std::exception()
-    {}
-
-    virtual ~close() noexcept override = default;
-    virtual const char* what() const noexcept override final { return "close window"; }
-  };
-
-  extern const ftxui::Event lock_wallet;
-
-}} // lwcli // event
+    std::uint64_t height = 0;
+    const auto end = str.data() + str.size();
+    auto [ptr, ec] = std::from_chars(str.data(), end, height);
+    if (bool(ec) || ptr != end)
+      return std::nullopt;
+    return height;
+  }
+}

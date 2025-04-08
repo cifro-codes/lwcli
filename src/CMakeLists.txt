@@ -30,7 +30,10 @@ include_directories(.)
 add_subdirectory(decorate)
 add_subdirectory(views)
 
-add_executable(lwcli main.cpp)
+add_executable(lwcli events.cpp main.cpp)
 target_include_directories(lwcli PRIVATE ".")
 target_link_libraries(lwcli PRIVATE lwsf-api component lwcli-views)
 
+if (DEFINED ENABLE_WALLET2)
+  target_compile_definitions(lwcli PRIVATE LWCLI_WALLET2_ENABLED)
+endif ()

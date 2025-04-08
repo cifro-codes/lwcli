@@ -39,6 +39,8 @@ namespace lwcli { namespace config
 
   constexpr const std::string_view default_language{"English"};
 
+  //! Timeout interval for inactivity with open wallet
+  constexpr const std::chrono::minutes wallet_timeout{2};
   namespace server
   { 
     constexpr const std::string_view default_url{"http://127.0.0.1:8080"};
