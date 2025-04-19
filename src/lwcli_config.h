@@ -37,6 +37,18 @@ namespace lwcli { namespace config
 {
   inline Monero::NetworkType network = Monero::MAINNET;
 
+  //! Max length for small-string optimization expectations
+  constexpr const unsigned sso_max = 15;
+
+  //! \return True if `str` passes sso requirements.
+  constexpr bool verify_sso(const std::string_view str) noexcept
+  { return str.size() <= sso_max; }
+
+  //! \return True if all `strs` pass sso requirements.
+  template<typename... T>
+  constexpr bool verify_sso(const T... strs) noexcept
+  { return ( ... && verify_sso(strs)); }
+
   constexpr const std::string_view default_language{"English"};
 
   //! Timeout interval for inactivity with open wallet
@@ -46,9 +58,20 @@ namespace lwcli { namespace config
     constexpr const std::string_view default_url{"http://127.0.0.1:8080"};
     constexpr const std::chrono::seconds default_refresh_interval{30};
 
-    constexpr const std::string_view proxy{"lwcli.server.proxy"};
-    constexpr const std::string_view refresh_interval{"lwcli.server.refresh_interval"};
-    constexpr const std::string_view ssl{"lwcli.server.ssl"};
-    constexpr const std::string_view url{"lwcli.server.url"};
+    constexpr const std::string_view proxy{"lwcli.ser.proxy"};
+    constexpr const std::string_view refresh_interval{"lwcli.ser.refr"};
+    constexpr const std::string_view ssl{"lwcli.ser.ssl"};
+    constexpr const std::string_view url{"lwcli.ser.url"};
+
+    static_assert(verify_sso(proxy, refresh_interval, ssl, url));
   }
+
+  constexpr const std::uint32_t default_major_lookahead = 50;
+  constexpr const std::uint32_t default_minor_lookahead = 200;
+
+  constexpr const std::string_view major_lookahead{"lwcli.wal.maj_l"};
+  constexpr const std::string_view minor_lookahead{"lwcli.wal.min_l"};
+
+  static_assert(verify_sso(major_lookahead, minor_lookahead));
+
 }} // lwcli // config

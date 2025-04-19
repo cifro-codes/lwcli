@@ -38,6 +38,7 @@
 #include "events.h"
 #include "lwcli_config.h"
 #include "translate.h"
+#include "util.h"
 #include "views/history.h"
 
 
@@ -45,16 +46,6 @@ namespace lwcli { namespace view
 {
   namespace
   {
-    std::optional<std::uint64_t> from_string(const std::string_view str) noexcept
-    {
-      std::uint64_t out = 0;
-      const auto end = str.data() + str.size();
-      auto [ptr, ec] = std::from_chars(str.data(), end, out);
-      if (bool(ec) || ptr != end)
-        return std::nullopt;
-      return out;
-    }
-
     bool set_proxy(Monero::Wallet& wal, const std::string& proxy)
     {
       wal.setProxy(proxy);
@@ -88,6 +79,34 @@ namespace lwcli { namespace view
       return true;
     }
 
+    bool set_major_lookahead(Monero::Wallet& wal, const std::string& major)
+    {
+      const auto major_integer = from_string(major);
+      if (!major_integer)
+        return false;
+
+      auto minor = from_string(wal.getCacheAttribute(std::string{config::minor_lookahead}));
+      if (!minor)
+        minor = config::default_minor_lookahead;
+
+      wal.setSubaddressLookahead(*major_integer, *minor);
+      return true;
+    }
+
+    bool set_minor_lookahead(Monero::Wallet& wal, const std::string& minor)
+    {
+      const auto minor_integer = from_string(minor);
+      if (!minor_integer)
+        return false;
+
+      auto major = from_string(wal.getCacheAttribute(std::string{config::major_lookahead}));
+      if (!major)
+        major = config::default_major_lookahead;
+
+      wal.setSubaddressLookahead(*major, *minor_integer);
+      return true;
+    }
+
     struct option
     {
       using updater = bool(Monero::Wallet&, const std::string&);
@@ -96,11 +115,13 @@ namespace lwcli { namespace view
       updater* const update;
     };
 
-    const std::array<option, 4> options{{
-      {config::server::proxy,            _("Proxy"),                      set_proxy},
+    const std::array<option, 6> options{{
+      {config::server::url,              _("API Server"),                 set_url},
       {config::server::refresh_interval, _("Refresh Interval (seconds)"), set_refresh},
       {config::server::ssl,              _("TLS/SSL Cert Check"),         set_ssl},
-      {config::server::url,              _("API Server"),                 set_url}
+      {config::server::proxy,            _("Proxy"),                      set_proxy},
+      {config::major_lookahead,          _("Subaddress Major Lookahead"), set_major_lookahead},
+      {config::minor_lookahead,          _("Subaddress Minor Lookahead"), set_minor_lookahead}
     }};
 
     ftxui::Component last_input(std::string* str)

@@ -31,6 +31,7 @@
 #include <charconv>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
+#include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/table.hpp>
 #include <lws_frontend.h>
 
@@ -58,14 +59,14 @@ namespace lwcli { namespace view
       const std::shared_ptr<Monero::Wallet> wal = state->wal;
       return ftxui::Container::Horizontal({
         ftxui::Button("[s]end", [] () {}, ascii()),
-        ftxui::Button("address [b]ook", [] () {}, ascii()),
+        ftxui::Button("[b]ook", [] () {}, ascii()),
         ftxui::Button("[a]ccounts", [] () {}, ascii()),
         ftxui::Button("[r]efresh", [wal] () { wal->refreshAsync(); }, ascii()),
         ftxui::Button("s[e]ttings", [state] () { state->overlay = settings(state->wal); }, ascii())
       });
     }
 
-    class wallet_ final : public ftxui::ComponentBase
+    class wallet_ final : public ftxui::ComponentBase, Monero::WalletListener
     {
       wallet_state state_;
       ftxui::Element title_;
@@ -83,6 +84,28 @@ namespace lwcli { namespace view
         return ui_;
       }
 
+      void moneySpent(const std::string &txId, uint64_t amount) override final
+      {}
+
+      void moneyReceived(const std::string &txId, uint64_t amount) override final
+      {}
+      
+      void unconfirmedMoneyReceived(const std::string &txId, uint64_t amount) override final
+      {}
+
+      void newBlock(uint64_t height) override final
+      {}
+
+      void updated() override final
+      {}
+
+      void refreshed() override final
+      {
+        ftxui::ScreenInteractive* const active = ftxui::ScreenInteractive::Active();
+        if (active)
+          active->PostEvent(event::refresh_wallet);
+      }
+
     public:
       explicit wallet_(std::shared_ptr<Monero::Wallet>&& data)
         : ftxui::ComponentBase(),
@@ -96,9 +119,15 @@ namespace lwcli { namespace view
       {
         if (!state_.wal)
           throw std::runtime_error{"Unexpected nullptr Monero wallet"};
+        state_.wal->setListener(this);
         bar_ = menu_bar(&state_);
         title_ = ftxui::text(_("lwcli Wallet (Primary ") + state_.wal->mainAddress() + ")");
         update_account();
+      }
+
+      virtual ~wallet_() noexcept override final
+      {
+        state_.wal->setListener(nullptr);
       }
 
       void update_account()
@@ -120,7 +149,9 @@ namespace lwcli { namespace view
         {
           const bool has_overlay = bool(state_.overlay);
 
-          if (state_.overlay)
+          if (event == event::refresh_wallet)
+            return true;
+          else if (state_.overlay)
             state_.overlay->OnEvent(std::move(event));
           else if (event == ftxui::Event::CtrlQ)
             throw event::close{};
@@ -159,16 +190,13 @@ namespace lwcli { namespace view
         const bool connected =
           state_.wal->connected() == Monero::Wallet::ConnectionStatus_Connected;
 
-        std::string status;
-        if (!connected)
-        {
-          status = "Disconnected";
-          const std::string& error = state_.wal->errorString();
-          if (!error.empty())
-            status += ": " + error;
-        }
-        else
-          status = "Connected";
+        int status = 0;
+        std::string error;
+        state_.wal->statusWithErrorString(status, error);
+
+        std::string message = connected ? "Connected" : "Disconnected";
+        if (status != Monero::Wallet::Status_Ok)
+          message.append(": ").append(error);
 
         auto screen = ftxui::vbox({
           title_,
@@ -176,7 +204,7 @@ namespace lwcli { namespace view
           ftxui::separator(),
           history_->Render() | ftxui::yflex_shrink,
           ftxui::filler(), 
-          ftxui::inverted(decorate::banner(ftxui::text(std::move(status))))
+          ftxui::inverted(decorate::banner(ftxui::text(std::move(message))))
         });
  
         if (state_.overlay)

@@ -282,7 +282,7 @@ namespace lwcli { namespace view
 
         // perform transalation lookup once
         base_rows = {
-          {_("Date"), _("Amount"), _("Payment ID"), _("Desription"), _("Block"), _("Fee"), _("Hash (abbr)")},
+          {_("Date"), _("Amount"), _("Payment ID"), _("Desription"), _("Block"), _("Fee"), _("Hash")},
           {  "",        "",          "",              "",              "",         "",       ""            }
         };
       }
@@ -397,14 +397,16 @@ namespace lwcli { namespace view
             if (payment_id.size() == 16 && payment_id.find_first_not_of('0') == std::string::npos)
               payment_id.clear();
 
+            char const* const extended_payment_id = 16 < payment_id.size() ?
+              "..." : "";
             rows.push_back({
               std::string{date},
               print_amount(amount, direction),
-              payment_id.substr(0, 16),
+              payment_id.substr(0, 16) + extended_payment_id,
               tx->description(),
               std::to_string(tx->blockHeight()),
               print_money(tx->fee()),
-              tx->hash().substr(0, 16)
+              tx->hash().substr(0, 16) + "..."
             });
 
             ++i;

@@ -33,4 +33,5 @@ namespace lwcli { namespace event
   /* Keep under 15 characters so that libstdc++ and libc++ can use small
   string optmization. */
   const ftxui::Event lock_wallet = ftxui::Event::Special("lwcli.lockw");
+  const ftxui::Event refresh_wallet = ftxui::Event::Special("lwcli.refresh");
 }}

@@ -45,5 +45,6 @@ namespace lwcli { namespace event
   };
 
   extern const ftxui::Event lock_wallet;
+  extern const ftxui::Event refresh_wallet;
 
 }} // lwcli // event

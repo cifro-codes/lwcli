@@ -117,9 +117,10 @@ namespace lwcli { namespace view
       std::string server;
       std::string proxy;
       bool ssl;
+      bool subaddresses;
 
       new_wallet(std::string default_file)
-        : wallet_base(std::move(default_file)), confirm(), language(config::default_language), server(config::server::default_url), proxy(), ssl(false)
+        : wallet_base(std::move(default_file)), confirm(), language(config::default_language), server(config::server::default_url), proxy(), ssl(false), subaddresses(true)
       {}
 
       void setup(Monero::Wallet& wal)
@@ -128,6 +129,15 @@ namespace lwcli { namespace view
         wal.setCacheAttribute(std::string{config::server::url}, server);
         wal.setCacheAttribute(std::string{config::server::proxy}, proxy);
         wal.setCacheAttribute(std::string{config::server::ssl}, std::to_string(int(ssl)));
+
+        const std::uint32_t major_lookahead = subaddresses ?
+          config::default_major_lookahead : 0;
+        const std::uint32_t minor_lookahead = subaddresses ?
+          config::default_minor_lookahead : 0;
+
+        wal.setCacheAttribute(std::string{config::major_lookahead}, std::to_string(major_lookahead));
+        wal.setCacheAttribute(std::string{config::minor_lookahead}, std::to_string(minor_lookahead));
+        wal.setSubaddressLookahead(major_lookahead, minor_lookahead);
       }
     };
 
@@ -239,6 +249,7 @@ namespace lwcli { namespace view
                   enclosed->config.password.clear();
                   enclosed->config.confirm.clear();
                   enclosed->state->overlay = view::keys(prepped, true /* show warning */);
+                  prepped->startRefresh();
                   enclosed->state->wal = prepped;
                 }
               }
@@ -260,7 +271,7 @@ namespace lwcli { namespace view
           {ftxui::text(_("Language: ")), last_input(&enclosed->config.language)},
           {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Options: ")), ftxui::Checkbox(_("TLS/SSL Cert Check"), &enclosed->config.ssl)}
+          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl), ftxui::Checkbox(_("Subaddresses"), &enclosed->config.subaddresses)})}
         },
         create
       };
@@ -335,7 +346,7 @@ namespace lwcli { namespace view
           {ftxui::text(_("Height: ")), last_input(&enclosed->height)},
           {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Options: ")), ftxui::Checkbox(_("TLS/SSL Cert Check"), &enclosed->config.ssl)}
+          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl), ftxui::Checkbox(_("Subaddresses"), &enclosed->config.subaddresses)})}
         },
         recover
       };
@@ -421,7 +432,7 @@ namespace lwcli { namespace view
           {ftxui::text(_("Language: ")), last_input(&enclosed->config.language)},
           {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Options: ")), ftxui::Checkbox(_("TLS/SSL Cert Check"), &enclosed->config.ssl)}
+          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl), ftxui::Checkbox(_("Subaddresses"), &enclosed->config.subaddresses)})}
         },
         recover
       };
