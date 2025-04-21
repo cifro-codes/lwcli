@@ -39,6 +39,7 @@
 #include "events.h"
 #include "lwcli_config.h"
 #include "translate.h"
+#include "views/accounts.h"
 #include "views/history.h"
 #include "views/settings.h"
 
@@ -52,6 +53,7 @@ namespace lwcli { namespace view
     {
       const std::shared_ptr<Monero::Wallet> wal;
       ftxui::Component overlay;
+      std::uint32_t selected_account = 0;
     };
 
     ftxui::Component menu_bar(wallet_state* state)
@@ -60,7 +62,7 @@ namespace lwcli { namespace view
       return ftxui::Container::Horizontal({
         ftxui::Button("[s]end", [] () {}, ascii()),
         ftxui::Button("[b]ook", [] () {}, ascii()),
-        ftxui::Button("[a]ccounts", [] () {}, ascii()),
+        ftxui::Button("[a]ccounts", [state] () { state->overlay = accounts(state->wal, &state->selected_account); }, ascii()),
         ftxui::Button("[r]efresh", [wal] () { wal->refreshAsync(); }, ascii()),
         ftxui::Button("s[e]ttings", [state] () { state->overlay = settings(state->wal); }, ascii())
       });
@@ -71,7 +73,6 @@ namespace lwcli { namespace view
       wallet_state state_;
       ftxui::Element title_;
       std::uint32_t active_account_;
-      std::uint32_t selected_account_;
       ftxui::Component bar_;
       ftxui::Component ui_;
       ftxui::Component history_;
@@ -112,7 +113,6 @@ namespace lwcli { namespace view
           state_{std::move(data)},
           title_(nullptr),
           active_account_(-1),
-          selected_account_(0),
           bar_(),
           ui_(),
           history_(nullptr)
@@ -132,15 +132,15 @@ namespace lwcli { namespace view
 
       void update_account()
       {
-        if (active_account_ != selected_account_)
+        if (active_account_ != state_.selected_account)
         {
           if (ui_)
             ui_->Detach();
-          history_ = view::history(state_.wal, selected_account_);
+          history_ = view::history(state_.wal, state_.selected_account);
           ui_ = ftxui::Container::Vertical({bar_, history_});
           Add(ui_);
         }
-        active_account_ = selected_account_;
+        active_account_ = state_.selected_account;
       }
 
       bool OnEvent(ftxui::Event event) override final
@@ -162,7 +162,7 @@ namespace lwcli { namespace view
             else if (event == ftxui::Event::b || event == ftxui::Event::B)
               ; // state_.overlay = book(state_.wal);
             else if (event == ftxui::Event::a || event == ftxui::Event::a)
-              ; // overlay = accounts(state_.wal, &active_account_);
+              state_.overlay = accounts(state_.wal, &state_.selected_account);
             else if (event == ftxui::Event::r || event == ftxui::Event::R)
               state_.wal->refreshAsync();
             else if (event == ftxui::Event::e || event == ftxui::Event::E)

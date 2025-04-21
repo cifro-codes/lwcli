@@ -34,6 +34,7 @@
 #include <map>
 #include <unordered_map>
 
+#include "components/table.h"
 #include "decorate/overlay.h"
 #include "events.h"
 #include "history.h"
@@ -244,27 +245,30 @@ namespace lwcli { namespace view
     class history_ final : public ftxui::ComponentBase
     {
       const std::shared_ptr<Monero::Wallet> wallet_;
+      ftxui::Component table_;
       ftxui::Component overlay_;
       ftxui::Element title_;
-      ftxui::Element table_; //!< Does not redraw when child is enabled
-      std::vector<std::vector<std::string>> base_rows;
-      std::ptrdiff_t highlighted_;
-      std::unordered_map<std::size_t, int> row_map_;
+      ftxui::Element table_cached_; //!< Does not redraw when child is enabled
+      std::unordered_map<std::size_t, std::size_t> row_map_;
+      std::uint64_t balance_;
       const std::uint32_t account_;
 
-      static constexpr std::size_t min_row() noexcept { return 2; };
       bool Focusable() const override final { return true; }
-      ftxui::Component ActiveChild() override final { return overlay_; }
+      ftxui::Component ActiveChild() override final
+      {
+        if (overlay_)
+          return overlay_;
+        return table_;
+      }
 
     public:
       explicit history_(std::shared_ptr<Monero::Wallet>&& wallet, std::uint32_t account)
         : ftxui::ComponentBase(),
           wallet_(std::move(wallet)),
+          table_(),
           overlay_(nullptr),
           title_(nullptr),
-          table_(nullptr),
-          base_rows(),
-          highlighted_(min_row() - 1),
+          table_cached_(nullptr),
           row_map_(),
           account_(account)
       {
@@ -281,10 +285,22 @@ namespace lwcli { namespace view
         title_ = ftxui::text(std::move(address));
 
         // perform transalation lookup once
-        base_rows = {
+        table_ = component::table(
           {_("Date"), _("Amount"), _("Payment ID"), _("Desription"), _("Block"), _("Fee"), _("Hash")},
-          {  "",        "",          "",              "",              "",         "",       ""            }
-        };
+          [this] () { return transaction_list(); },
+          [this] (std::size_t i) { return add_overlay(i); }
+        );
+
+        Add(table_);
+      }
+
+      bool add_overlay(const std::size_t i)
+      {
+        if (overlay_)
+          overlay_->Detach();
+        overlay_ = std::make_shared<tx_details>(wallet_->history(), row_map_.at(i));
+        Add(overlay_);
+        return true;
       }
 
       bool OnEvent(ftxui::Event event) override final
@@ -300,19 +316,8 @@ namespace lwcli { namespace view
             throw event::close{};
           else if (event.is_character())
             return false;
-          else if (event == ftxui::Event::ArrowDown && highlighted_ < row_map_.size() + min_row() - 1)
-            ++highlighted_;
-          else if (event == ftxui::Event::ArrowUp && min_row() <= highlighted_)
-            --highlighted_;
-          else if (event == ftxui::Event::PageDown)
-            highlighted_ = std::min(std::ptrdiff_t(row_map_.size() + min_row()), highlighted_ + 10);
-          else if (event == ftxui::Event::PageUp)
-            highlighted_ = std::max(std::ptrdiff_t(min_row()), highlighted_ - 10);
-          else if (event == ftxui::Event::Return)
-          {
-            overlay_ = ftxui::Make<tx_details>(wallet_->history(), row_map_.at(highlighted_ - min_row()));
-            Add(overlay_);
-          } 
+          else
+            return table_->OnEvent(std::move(event));
         }
         catch (const event::close&)
         {
@@ -321,121 +326,101 @@ namespace lwcli { namespace view
           overlay_->Detach();
           overlay_.reset();
         }
-        return min_row() <= highlighted_ && highlighted_ - min_row() < row_map_.size();
+        return true;
+      }
+
+      std::vector<std::vector<std::string>> transaction_list()
+      {
+        Monero::TransactionHistory* tx_history = wallet_->history();
+        if (!tx_history)
+          throw std::runtime_error{"unexpected history nullptr"};
+
+        std::map<std::pair<std::uint64_t, std::string>, std::pair<const Monero::TransactionInfo*, std::size_t>, std::greater<>> ordered;
+        tx_history->refresh();
+        const auto history = tx_history->getAll();
+        for (std::size_t i = 0; i < history.size(); ++i)
+        {
+          const Monero::TransactionInfo* tx = history[i];
+          if (!tx)
+            throw std::runtime_error{"unexpected tx_info nullptr"};
+
+          if (tx->subaddrAccount() == account_)
+            ordered.try_emplace({tx->blockHeight(), tx->hash()}, tx, i);
+        }
+
+        balance_ = 0;
+        std::vector<std::vector<std::string>> rows;
+        rows.reserve(ordered.size() + 2);
+
+        std::size_t i = 0;
+        row_map_.clear();
+        for (const auto& entry : ordered)
+        {
+          const Monero::TransactionInfo* tx = entry.second.first;
+          row_map_.emplace(i, entry.second.second);
+         
+          const std::uint64_t amount = tx->amount();
+          const int direction = tx->direction();
+          const std::uint64_t fee = tx->fee();
+
+        
+          if (!tx->isFailed())
+          {
+            if (direction == Monero::TransactionInfo::Direction_Out)
+            {
+              balance_ -= amount;
+              balance_ -= fee;
+            }
+            else
+              balance_ += amount;
+          }
+
+          std::tm expanded{};
+          const std::time_t timestamp = tx->timestamp();
+          if (!gmtime_r(std::addressof(timestamp), std::addressof(expanded)))
+            throw std::runtime_error{"gmtime failure"};
+
+          char date[12] = {0};
+          if (sizeof(date) - 1 != std::strftime(date, sizeof(date), "%Y/%m/%d ", std::addressof(expanded)))
+            throw std::runtime_error{"strftime failed"};
+
+          std::string payment_id = tx->paymentId();
+          if (payment_id.size() == 16 && payment_id.find_first_not_of('0') == std::string::npos)
+            payment_id.clear();
+
+          char const* const extended_payment_id = 16 < payment_id.size() ?
+            "..." : "";
+          rows.push_back({
+            std::string{date},
+            print_amount(amount, direction),
+            payment_id.substr(0, 16) + extended_payment_id,
+            tx->description(),
+            std::to_string(tx->blockHeight()),
+            print_money(tx->fee()),
+            tx->hash().substr(0, 16) + "..."
+          });
+
+          ++i;
+        }
+
+        return rows;
       }
 
       ftxui::Element OnRender() override final
       {
-        if (Focused())
-        {
-          if (highlighted_ < min_row())
-            highlighted_ = min_row();
-          else if (row_map_.size() <= highlighted_ - min_row())
-            highlighted_ = row_map_.size() - 1 + min_row();
-        }
-
         /* Do not redraw table when showing tx. the 
         history()->refresh() call can invalidate pointers */
         if (!overlay_)
         {
-          Monero::TransactionHistory* tx_history = wallet_->history();
-          if (!tx_history)
-            throw std::runtime_error{"unexpected history nullptr"};
-
-          std::map<std::pair<std::uint64_t, std::string>, std::pair<const Monero::TransactionInfo*, std::size_t>, std::greater<>> ordered;
-          tx_history->refresh();
-          const auto history = tx_history->getAll();
-          for (std::size_t i = 0; i < history.size(); ++i)
-          {
-            const Monero::TransactionInfo* tx = history[i];
-            if (!tx)
-              throw std::runtime_error{"unexpected tx_info nullptr"};
-
-            if (tx->subaddrAccount() == account_)
-              ordered.try_emplace({tx->blockHeight(), tx->hash()}, tx, i);
-          }
-
-          std::uint64_t balance = 0;
-          std::vector<std::vector<std::string>> rows;
-          rows.reserve(ordered.size() + 2);
-          rows = base_rows;
-
-          std::size_t i = 0;
-          row_map_.clear();
-          for (const auto& entry : ordered)
-          {
-            const Monero::TransactionInfo* tx = entry.second.first;
-            row_map_.emplace(i, entry.second.second);
-           
-            const std::uint64_t amount = tx->amount();
-            const int direction = tx->direction();
-            const std::uint64_t fee = tx->fee();
-
-          
-            if (!tx->isFailed())
-            {
-              if (direction == Monero::TransactionInfo::Direction_Out)
-              {
-                balance -= amount;
-                balance -= fee;
-              }
-              else
-                balance += amount;
-            }
-
-            std::tm expanded{};
-            const std::time_t timestamp = tx->timestamp();
-            if (!gmtime_r(std::addressof(timestamp), std::addressof(expanded)))
-              throw std::runtime_error{"gmtime failure"};
-
-            char date[12] = {0};
-            if (sizeof(date) - 1 != std::strftime(date, sizeof(date), "%Y/%m/%d ", std::addressof(expanded)))
-              throw std::runtime_error{"strftime failed"};
-
-
-            std::string payment_id = tx->paymentId();
-            if (payment_id.size() == 16 && payment_id.find_first_not_of('0') == std::string::npos)
-              payment_id.clear();
-
-            char const* const extended_payment_id = 16 < payment_id.size() ?
-              "..." : "";
-            rows.push_back({
-              std::string{date},
-              print_amount(amount, direction),
-              payment_id.substr(0, 16) + extended_payment_id,
-              tx->description(),
-              std::to_string(tx->blockHeight()),
-              print_money(tx->fee()),
-              tx->hash().substr(0, 16) + "..."
-            });
-
-            ++i;
-          }
-
-          ftxui::Table table{std::move(rows)};
-          table.SelectRow(0).Decorate(ftxui::bold);
-          table.SelectRow(0).SeparatorVertical(ftxui::LIGHT);
-          table.SelectRow(0).Border(ftxui::LIGHT);
-          //table.SelectColumn(3).DecorateCells(ftxui::xflex_grow);
-          if (min_row() <= highlighted_ && highlighted_ - min_row() < row_map_.size())
-          {
-            auto row = table.SelectRow(highlighted_);
-            row.Decorate(ftxui::inverted);
-            if (Focused())
-              row.Decorate(ftxui::focus);
-            else if (Active())
-              row.Decorate(ftxui::select);
-          }
-     
-          table_ = ftxui::vbox({
+          auto table = table_->Render(); // compute balance first in callback 
+          table_cached_ = ftxui::vbox({
             title_,
-            ftxui::text(_("Balance: ") + print_money(balance)),
-            table.Render() | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center | ftxui::flex
-            //ftxui::flex(ftxui::yframe(ftxui::vscroll_indicator(table.Render())))
+            ftxui::text(_("Balance: ") + print_money(balance_)),
+            std::move(table) | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center | ftxui::flex
           }); 
-          return table_;
+          return table_cached_;
         }
-        return ftxui::dbox(table_, decorate::overlay(overlay_->Render()));
+        return ftxui::dbox(table_cached_, decorate::overlay(overlay_->Render()));
       }
     };
   } // anonymous

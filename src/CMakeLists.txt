@@ -27,6 +27,7 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 include_directories(.)
+add_subdirectory(components)
 add_subdirectory(decorate)
 add_subdirectory(views)
 

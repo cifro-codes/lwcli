@@ -50,6 +50,8 @@ namespace lwcli { namespace config
   { return ( ... && verify_sso(strs)); }
 
   constexpr const std::string_view default_language{"English"};
+  constexpr const std::string_view default_account_name{"Untitled Account"};
+  constexpr const std::string_view default_subaddress_name{"Untitled Address"};
 
   //! Timeout interval for inactivity with open wallet
   constexpr const std::chrono::minutes wallet_timeout{2};

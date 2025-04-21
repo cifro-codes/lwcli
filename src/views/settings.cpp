@@ -31,7 +31,6 @@
 #include <charconv>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
-#include <ftxui/dom/table.hpp>
 #include <lws_frontend.h>
 
 #include "decorate/overlay.h"
@@ -73,8 +72,7 @@ namespace lwcli { namespace view
       const auto is_ssl = from_string(ssl);
       if (!is_ssl)
         return false;
-      
-      // no way to forcibly select ssl without another init call. hopefully doesn't break things
+
       wal.init(wal.getCacheAttribute(std::string{config::server::url}), 0, "", "", bool(*is_ssl), true, wal.getCacheAttribute(std::string{config::server::proxy}));
       return true;
     }
@@ -251,6 +249,8 @@ namespace lwcli { namespace view
 
   ftxui::Component settings(std::shared_ptr<Monero::Wallet> wal)
   {
+    if (!wal)
+      throw std::invalid_argument{"view::settings cannot be given nullptr"};
     return std::make_shared<settings_>(std::move(wal));
   }
 
