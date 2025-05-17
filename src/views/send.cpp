@@ -238,7 +238,7 @@ namespace lwcli { namespace view
       ftxui::Element error_;
       ftxui::Component ui_;
       ftxui::Element cached_;
-      std::future<std::optional<std::pair<std::string, std::shared_ptr<dest_pair>>>> oa_;
+      std::future<std::tuple<std::string, std::shared_ptr<dest_pair>, bool>> oa_;
       std::future<std::tuple<std::shared_ptr<Monero::PendingTransaction>, dest_group, std::string>> tx_;
       const std::uint32_t account_;
       unsigned animation_;
@@ -355,13 +355,11 @@ namespace lwcli { namespace view
               return;
             }
             const auto oa_lookup = [dest] (std::shared_ptr<Monero::WalletManager> wm, const std::string& uri)
-              -> std::optional<std::pair<std::string, std::shared_ptr<dest_pair>>>
+              -> std::tuple<std::string, std::shared_ptr<dest_pair>, bool>
             {
               bool dnssec = false;
               std::string result = wm->resolveOpenAlias(uri, dnssec);
-              if (!dnssec)
-                return std::nullopt;
-              return {{std::move(result), dest}};
+              return std::make_tuple(std::move(result), dest, dnssec);
             };
 
             if (!wm_)
@@ -438,16 +436,17 @@ namespace lwcli { namespace view
             auto oa = oa_.get();
             error_.reset();
 
-            if (!oa)
-              error_ = ftxui::text(_("dnssec failure for domain"));
-            else if (oa->first.empty())
-              error_ = ftxui::text(_("No XMR OpenAlias found"));
-            else if (!lwsf::addressValid(oa->first, wal_->nettype()))
-              error_ = ftxui::text(_("OpenAlias record is invalid"));
+            if (std::get<0>(oa).empty())
+              error_ = ftxui::text(_("No XMR OpenAlias found for ") + std::get<1>(oa)->second);
+            else if (!lwsf::addressValid(std::get<0>(oa), wal_->nettype()))
+              error_ = ftxui::text(_("OpenAlias record is invalid for ") + std::get<1>(oa)->second);
             else if (!closing_)
             {
-              oa->second->second = std::move(oa->first);
-              try_construct();
+	      std::get<1>(oa)->second = std::move(std::get<0>(oa));
+              if (!std::get<2>(oa))
+                error_ = ftxui::text(_("dnssec verification failure for ") + std::get<1>(oa)->second);
+	      else
+                try_construct();
             }
 
             animate = oa_.valid();
