@@ -47,13 +47,12 @@ namespace lwcli { namespace view
   {
     bool set_proxy(Monero::Wallet& wal, const std::string& proxy)
     {
-      wal.setProxy(proxy);
-      return true;
+      return wal.setProxy(proxy);
     }
 
     bool set_url(Monero::Wallet& wal, const std::string& url)
     {
-      const bool is_ssl = bool(from_string(wal.getCacheAttribute(std::string{config::server::ssl})));
+      const bool is_ssl = bool(from_string(wal.getCacheAttribute(std::string{config::server::ssl})).value_or(0));
       wal.init(url, 0, "", "", is_ssl, true, wal.getCacheAttribute(std::string{config::server::proxy}));
       return true;
     }

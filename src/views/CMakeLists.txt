@@ -26,8 +26,8 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(lwcli-views_sources accounts.cpp history.cpp keys.cpp manager.cpp settings.cpp wallet.cpp)
-set(lwscli-views_headers accounts.h history.h keys.h manager.h settings.h wallet.h)
+set(lwcli-views_sources accounts.cpp history.cpp keys.cpp manager.cpp send.cpp settings.cpp wallet.cpp)
+set(lwscli-views_headers accounts.h history.h keys.h manager.h send.h settings.h wallet.h)
 
 add_library(lwcli-views ${lwcli-views_sources} ${lwcli-views_headers})
 target_link_libraries(lwcli-views PRIVATE component dom lwcli-components lwcli-decorate lwsf-api)

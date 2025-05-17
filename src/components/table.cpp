@@ -41,7 +41,7 @@ namespace lwcli { namespace component
     class table_ final : public ftxui::ComponentBase
     {
       const table_generator generator_;
-      const table_enter enter_;
+      const table_on_key key_;
       const std::vector<std::vector<std::string>> title_;
       std::ptrdiff_t rows_;
       std::ptrdiff_t selected_;
@@ -62,10 +62,10 @@ namespace lwcli { namespace component
       }
 
     public:
-      explicit table_(std::vector<std::string>&& title, table_generator&& generator, table_enter&& enter)
+      explicit table_(std::vector<std::string>&& title, table_generator&& generator, table_on_key&& key)
         : ftxui::ComponentBase(),
           generator_(std::move(generator)),
-          enter_(std::move(enter)),
+          key_(std::move(key)),
           title_(get_title_bar(std::move(title))),
           rows_(0),
           selected_(-1)
@@ -80,18 +80,31 @@ namespace lwcli { namespace component
         rows_ = rows;
       }
 
+      bool can_increment() const noexcept
+      { return selected_ + min_row() < rows_; }
+
+      bool can_decrement() const noexcept
+      { return min_row() <= selected_; }
+
       bool OnEvent(ftxui::Event event) override final
       {
-        if (event == ftxui::Event::ArrowDown && selected_ + min_row() < rows_)
+        if (event.is_mouse())
+        {
+          if (event.mouse().button == ftxui::Mouse::WheelDown && can_increment())
+            ++selected_;
+          else if (event.mouse().button == ftxui::Mouse::WheelUp && can_decrement())
+            --selected_;// = std::max(min_row(), selected_ - 1);
+        }
+        else if (event == ftxui::Event::ArrowDown && can_increment())
           ++selected_;
-        else if (event == ftxui::Event::ArrowUp && min_row() <= selected_)
+        else if (event == ftxui::Event::ArrowUp && can_decrement())
           --selected_;
         else if (event == ftxui::Event::PageDown)
           selected_ = std::min(rows_ + min_row(), selected_ + 15);
         else if (event == ftxui::Event::PageUp)
           selected_ = std::max(min_row(), selected_ - 15);
-        else if (event == ftxui::Event::Return && min_row() <= selected_ && selected_ < rows_)
-          return enter_(std::size_t(selected_));
+        else if (min_row() <= selected_ && selected_ < rows_)
+          return key_(std::move(event), std::size_t(selected_)); 
 
         return min_row() <= selected_ && selected_ - min_row() < rows_;
       }
@@ -119,23 +132,24 @@ namespace lwcli { namespace component
             selected_ = min_row();
           else if (rows_ <= selected_ - min_row())
             selected_ = rows_ - 1 + min_row();
-
-          if (min_row() <= selected_ && selected_ < rows_)
-          {
-            auto row = table.SelectRow(std::size_t(selected_) + title_.size());
-            row.Decorate(ftxui::inverted);
-            row.Decorate(ftxui::focus);
-          }
         }
+
+        if (min_row() <= selected_ && selected_ < rows_)
+        {
+          auto row = table.SelectRow(std::size_t(selected_) + title_.size());
+          row.Decorate(ftxui::inverted);
+          row.Decorate(ftxui::focus);
+        }
+
         return table.Render();
       }
     };
   } // anonymous
 
-  ftxui::Component table(std::vector<std::string> title, table_generator generator, table_enter enter)
+  ftxui::Component table(std::vector<std::string> title, table_generator generator, table_on_key key)
   {
-    if (!generator || !enter)
+    if (!generator || !key)
       throw std::invalid_argument{"lwcli::components::table was given nullptr"};
-    return std::make_shared<table_>(std::move(title), std::move(generator), std::move(enter));
+    return std::make_shared<table_>(std::move(title), std::move(generator), std::move(key));
   }
 }} // lwcli // view

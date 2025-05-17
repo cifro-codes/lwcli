@@ -34,4 +34,5 @@ namespace lwcli { namespace event
   string optmization. */
   const ftxui::Event lock_wallet = ftxui::Event::Special("lwcli.lockw");
   const ftxui::Event refresh_wallet = ftxui::Event::Special("lwcli.refresh");
+  const ftxui::Event send_async = ftxui::Event::Special("lwcli.sendasync");
 }}

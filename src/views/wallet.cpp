@@ -41,6 +41,7 @@
 #include "translate.h"
 #include "views/accounts.h"
 #include "views/history.h"
+#include "views/send.h"
 #include "views/settings.h"
 
 namespace lwcli { namespace view
@@ -51,6 +52,7 @@ namespace lwcli { namespace view
 
     struct wallet_state
     {
+      const std::shared_ptr<Monero::WalletManager> wm;
       const std::shared_ptr<Monero::Wallet> wal;
       ftxui::Component overlay;
       std::uint32_t selected_account = 0;
@@ -60,8 +62,7 @@ namespace lwcli { namespace view
     {
       const std::shared_ptr<Monero::Wallet> wal = state->wal;
       return ftxui::Container::Horizontal({
-        ftxui::Button("[s]end", [] () {}, ascii()),
-        ftxui::Button("[b]ook", [] () {}, ascii()),
+        ftxui::Button("[s]end", [state] () { state->overlay = send(state->wm, state->wal, state->selected_account); }, ascii()),
         ftxui::Button("[a]ccounts", [state] () { state->overlay = accounts(state->wal, &state->selected_account); }, ascii()),
         ftxui::Button("[r]efresh", [wal] () { wal->refreshAsync(); }, ascii()),
         ftxui::Button("s[e]ttings", [state] () { state->overlay = settings(state->wal); }, ascii())
@@ -108,9 +109,9 @@ namespace lwcli { namespace view
       }
 
     public:
-      explicit wallet_(std::shared_ptr<Monero::Wallet>&& data)
+      explicit wallet_(std::shared_ptr<Monero::WalletManager>&& wm, std::shared_ptr<Monero::Wallet>&& data)
         : ftxui::ComponentBase(),
-          state_{std::move(data)},
+          state_{std::move(wm), std::move(data)},
           title_(nullptr),
           active_account_(-1),
           bar_(),
@@ -121,7 +122,7 @@ namespace lwcli { namespace view
           throw std::runtime_error{"Unexpected nullptr Monero wallet"};
         state_.wal->setListener(this);
         bar_ = menu_bar(&state_);
-        title_ = ftxui::text(_("lwcli Wallet (Primary ") + state_.wal->mainAddress() + ")");
+        title_ = ftxui::text(_("lwcli Wallet (Primary ") + state_.wal->mainAddress().substr(0, 40) + "...)");
         update_account();
       }
 
@@ -158,9 +159,7 @@ namespace lwcli { namespace view
           else if (!ui_->OnEvent(event))
           {
             if (event == ftxui::Event::s || event == ftxui::Event::S)
-              ; // state_.overlay = send(state_.wal);
-            else if (event == ftxui::Event::b || event == ftxui::Event::B)
-              ; // state_.overlay = book(state_.wal);
+              state_.overlay = send(state_.wm, state_.wal, state_.selected_account);
             else if (event == ftxui::Event::a || event == ftxui::Event::a)
               state_.overlay = accounts(state_.wal, &state_.selected_account);
             else if (event == ftxui::Event::r || event == ftxui::Event::R)
@@ -214,8 +213,8 @@ namespace lwcli { namespace view
     };
   } // anonymous
 
-  ftxui::Component wallet(std::shared_ptr<Monero::Wallet> data)
+  ftxui::Component wallet(std::shared_ptr<Monero::WalletManager> wm, std::shared_ptr<Monero::Wallet> data)
   {
-    return std::make_shared<wallet_>(std::move(data));
+    return std::make_shared<wallet_>(std::move(wm), std::move(data));
   } 
 }} // lwcli // view

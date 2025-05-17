@@ -29,18 +29,16 @@
 #pragma once
 
 #include <cstdint>
-#include <ftxui/dom/elements.hpp>
 #include <ftxui/component/component_base.hpp>
-#include <functional>
-#include <string>
-#include <vector>
-
-namespace lwcli { namespace component
+// 9sMNg6xAhC15Y2r51xthUaHCuKDiFaojSBaSPUrAeBosZBYahFEii7dDq6y3pgaNUzBhvKmxPpWdnPquzsVLkDWB9JM3tiS
+namespace Monero
+{ 
+  class Wallet;
+  class WalletManager;
+}
+namespace lwcli { namespace view
 {
   //! Shows Transaction History
-  using table_generator = std::function<std::vector<std::vector<std::string>>()>;
-  using table_on_key = std::function<bool(ftxui::Event, std::size_t)>;
-  ftxui::Component table(std::vector<std::string> title, table_generator generator, table_on_key key);
-
+  ftxui::Component send(std::shared_ptr<Monero::WalletManager> wm, std::shared_ptr<Monero::Wallet> wallet, std::uint32_t account);
 }} // lwscli // view
 

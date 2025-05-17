@@ -30,9 +30,14 @@
 #include <cstdint>
 #include <ftxui/component/component_base.hpp>
 
-namespace Monero { class Wallet; }
+namespace Monero
+{ 
+  class Wallet;
+  class WalletManager;
+}
+
 namespace lwcli { namespace view
 {
-  ftxui::Component wallet(std::shared_ptr<Monero::Wallet> wallet);
+  ftxui::Component wallet(std::shared_ptr<Monero::WalletManager> wm, std::shared_ptr<Monero::Wallet> wallet);
 }} // lwscli // view
 

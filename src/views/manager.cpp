@@ -470,7 +470,7 @@ namespace lwcli { namespace view
       }
 
     public:
-      explicit start(std::shared_ptr<Monero::WalletManager>&& wm, std::string&& file, std::shared_ptr<Monero::Wallet>* out)
+      explicit start(std::shared_ptr<Monero::WalletManager> wm, std::string&& file, std::shared_ptr<Monero::Wallet>* out)
         : out_(out),
           title_(ftxui::text("wmcli")),
           help_(decorate::banner(ftxui::text(_("Ctrl-Q to close active window, Ctrl-C close app immediately")))),
@@ -598,6 +598,7 @@ namespace lwcli { namespace view
 
     class manager_ final : public ftxui::ComponentBase
     {
+      const std::shared_ptr<Monero::WalletManager> wm_;
       std::shared_ptr<Monero::Wallet> data_;
       const ftxui::Component start_;
       ftxui::Component wallet_;
@@ -613,8 +614,9 @@ namespace lwcli { namespace view
     public:
       explicit manager_(std::shared_ptr<Monero::WalletManager>&& wm, std::string&& file)
         : ftxui::ComponentBase(),
+          wm_(std::move(wm)),
           data_(nullptr),
-          start_(std::make_shared<start>(std::move(wm), std::move(file), &data_)),
+          start_(std::make_shared<start>(wm_, std::move(file), &data_)),
           wallet_(nullptr)
       {}
 
@@ -633,7 +635,7 @@ namespace lwcli { namespace view
               return wallet_->OnEvent(std::move(event));
           }
           else if (event != event::lock_wallet && start_->OnEvent(std::move(event)) && data_)
-            wallet_ = view::wallet(std::move(data_));
+            wallet_ = view::wallet(wm_, std::move(data_));
           data_.reset();
         }
         catch (const event::close&)

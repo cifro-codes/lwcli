@@ -54,6 +54,106 @@ namespace lwcli { namespace view
 
     ftxui::ButtonOption ascii() { return ftxui::ButtonOption::Ascii(); }
 
+    ftxui::Canvas make_qr_code(std::vector<std::vector<std::uint8_t>> raw)
+    {
+      const std::size_t size = raw.size();
+      if (std::numeric_limits<std::size_t>::max() / 4 < size)
+        throw std::runtime_error{"qrcode too large"};
+      if (std::numeric_limits<int>::max() / 4 < size)
+        throw std::runtime_error{"qrcode too large"};
+
+      const std::size_t canvas_size = (size * 2) + ((size % 2) * 2);
+      ftxui::Canvas out{int(canvas_size), int(canvas_size)};
+      for (std::size_t y = 0; y < canvas_size; ++y)
+        for (std::size_t x = 0; x < canvas_size; ++x)
+          out.DrawBlockOff(x, y);
+
+      for (std::size_t y = 0; y < size; ++y)
+      {
+        const auto& row = raw.at(y);
+        for (std::size_t x = 0; x < size; ++x)
+        {
+          if (row.at(x))
+          {
+            const int real_x = x * 2;
+            const int real_y = y * 2;
+            out.DrawBlockOn(real_x, real_y);
+            out.DrawBlockOn(real_x + 1, real_y);
+          }
+        }
+      }
+      return out;
+    }
+
+    class subaccount_ final : public ftxui::ComponentBase
+    {
+      std::string subaccount_name_;
+      const std::shared_ptr<Monero::Wallet> wal_;
+      const ftxui::Element title_;
+      const ftxui::Element desc_;
+      const ftxui::Canvas qr_code_raw_;
+      const ftxui::Element qr_code_;
+      ftxui::Component buttons_;
+      const ftxui::Component name_;
+      ftxui::Component ui_;
+      const std::uint32_t major_;
+      const std::uint32_t minor_;
+
+      bool Focusable() const override final { return true; }
+      ftxui::Component ActiveChild() override final { return ui_; }
+
+    public:
+      explicit subaccount_(std::shared_ptr<Monero::Wallet>&& wal, std::uint32_t major, std::uint32_t minor)
+        : ftxui::ComponentBase(),
+          subaccount_name_(wal->getSubaddressLabel(major, minor)),
+          wal_(std::move(wal)),
+          title_(ftxui::text(wal_->address(major, minor))),
+          desc_(ftxui::text(_("Name: "))),
+          qr_code_raw_(make_qr_code(lwsf::qrcode(wal_.get(), major, minor))),
+          qr_code_(ftxui::canvas(&qr_code_raw_)),
+          buttons_(),
+          name_(last_input(&subaccount_name_)),
+          ui_(),
+          major_(major),
+          minor_(minor)
+      {
+        buttons_ = ftxui::Container::Horizontal({
+          ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
+          ftxui::Button(_("Save"), [this] () {
+            wal_->setSubaddressLabel(major_, minor_, subaccount_name_);
+            throw event::close{};
+          }, ascii())
+        }); 
+
+        ui_ = ftxui::Container::Vertical({buttons_, name_});
+        Add(ui_);
+      }
+
+      bool OnEvent(ftxui::Event event) override final
+      {
+        if (event == ftxui::Event::CtrlQ)
+          throw event::close{};
+        ui_->OnEvent(std::move(event));
+        return true;
+      }
+
+      ftxui::Element OnRender() override final
+      {
+        return ftxui::window(title_, ftxui::vbox({
+          buttons_->Render() | ftxui::hcenter,
+          ftxui::separator(),
+          ftxui::hbox({desc_, name_->Render()}),
+          ftxui::separator(),
+          qr_code_ | ftxui::hcenter
+        }));
+      }
+    };
+
+    ftxui::Component subaccount(std::shared_ptr<Monero::Wallet> wal, std::uint32_t major, std::uint32_t minor)
+    {
+      return std::make_shared<subaccount_>(std::move(wal), major, minor);
+    }
+
     class account_detail final : public ftxui::ComponentBase
     {
       std::string account_name_;
@@ -67,6 +167,7 @@ namespace lwcli { namespace view
       ftxui::Component buttons_;
       const ftxui::Component name_;
       ftxui::Component ui_;
+      ftxui::Element cached_;
       std::unordered_map<std::size_t, std::size_t> row_map_;
       const std::uint32_t id_;
 
@@ -85,13 +186,15 @@ namespace lwcli { namespace view
           wal_(std::move(wal)),
           acct_(acct),
           title_(ftxui::text(_("Account #") + std::to_string(id))),
-          address_({ftxui::text("Address: "), ftxui::text(wal_->address(id, 0))}),
+          address_({ftxui::text("Primary: "), ftxui::text(wal_->address(id, 0).substr(0, 30) + "...")}),
           desc_(ftxui::text(_("Name: "))),
           details_(),
           table_(),
           buttons_(),
           name_(last_input(&account_name_)),
           ui_(),
+          cached_(),
+          row_map_(),
           id_(id)
       {
         if (!acct_)
@@ -105,25 +208,29 @@ namespace lwcli { namespace view
             wal_->setSubaddressLabel(id_, 0, account_name_);
             throw event::close{};
           }, ascii()),
-          ftxui::Button(_("Add Subaddress"), [this] () {
-            acct_->addRow(id_, std::string{config::default_subaddress_name});
-          }, ascii())
+          ftxui::Button(_("Add Subaddress"), [this] () { acct_->addRow(id_, std::string{}); }, ascii())
         });
  
         table_ = component::table(
           {_("#"), _("Label"), _("Address")},
           [this] () { return subaddress_list(); },
-          [this] (std::size_t i) { return display_details(i); }
+          [this] (ftxui::Event e, std::size_t i) { return display_details(e, i); }
         );
 
         ui_ = ftxui::Container::Vertical({buttons_, name_, table_});
         Add(ui_);
       }
 
-      bool display_details(const std::size_t index)
+      bool display_details(const ftxui::Event& e, const std::size_t index)
       {
-        if (row_map_.find(index) == row_map_.end())
-          throw std::logic_error{"DEBUG"};
+        if (e != ftxui::Event::Return)
+          return true;
+
+        const std::size_t minor = row_map_.at(index);
+        if (std::numeric_limits<std::uint32_t>::max() < minor)
+          throw std::runtime_error{"account::display_details invalid minor"};
+        details_ = subaccount(wal_, id_, std::uint32_t(minor));
+        Add(details_);
         return true;
       }
 
@@ -143,6 +250,7 @@ namespace lwcli { namespace view
             throw;
           details_->Detach();
           details_.reset();
+          account_name_ = wal_->getSubaddressLabel(id_, 0);
         }
         return true;
       }
@@ -177,13 +285,18 @@ namespace lwcli { namespace view
 
       ftxui::Element OnRender() override final
       {
-        return ftxui::window(title_, ftxui::vbox({
-          buttons_->Render() | ftxui::hcenter,
-          ftxui::separator(),
-          ftxui::gridbox({address_, {desc_, name_->Render()}}), 
-          ftxui::separator(),
-          table_->Render() | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center
-        }));
+        if (!details_)
+        {
+          cached_ = ftxui::window(title_, ftxui::vbox({
+            buttons_->Render() | ftxui::hcenter,
+            ftxui::separator(),
+            ftxui::gridbox({address_, {desc_, name_->Render()}}), 
+            ftxui::separator(),
+            table_->Render() | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center
+          }));
+          return cached_;
+        }
+        return ftxui::dbox(cached_, decorate::overlay(details_->Render()));
       }
     };
 
@@ -194,6 +307,7 @@ namespace lwcli { namespace view
       Monero::SubaddressAccount* const wal_accounts_;
       std::uint32_t* const account_;
       const ftxui::Element title_;
+      const ftxui::Element instructions_;
       ftxui::Component details_;
       ftxui::Component table_;
       ftxui::Element table_cached_;
@@ -216,6 +330,7 @@ namespace lwcli { namespace view
           wal_accounts_(wal_->subaddressAccount()),
           account_(account),
           title_(ftxui::text(_("Accounts"))),
+          instructions_(decorate::banner(ftxui::text("[l]oad account")) | ftxui::inverted),
           details_(),
           table_(),
           table_cached_(),
@@ -233,18 +348,24 @@ namespace lwcli { namespace view
         table_ = component::table(
           {_("#"), _("Balance"), _("Label"), _("Address")},
           [this] () { return accounts_list(); },
-          [this] (std::size_t i) { return display_details(i); }
+          [this] (ftxui::Event e, std::size_t i) { return display_details(e, i); }
         );
 
         ui_ = ftxui::Container::Vertical({buttons_, table_});
         Add(ui_);
       }
 
-      bool display_details(const std::size_t index)
+      bool display_details(const ftxui::Event& e, const std::size_t index)
       {
-        if (details_)
-          details_->Detach();
-        details_ = std::make_shared<account_detail>(wal_, wal_->subaddress(), row_map_.at(index));
+        if (e == ftxui::Event::Return)
+        {
+          if (details_)
+            details_->Detach();
+          details_ = std::make_shared<account_detail>(wal_, wal_->subaddress(), row_map_.at(index));
+          Add(details_);
+        }
+        else if (e == ftxui::Event::l || e == ftxui::Event::L)
+          *account_ = row_map_.at(index);
         return true;
       } 
 
@@ -305,7 +426,8 @@ namespace lwcli { namespace view
           table_cached_ = ftxui::window(title_, ftxui::vbox({
             buttons_->Render() | ftxui::hcenter,
             ftxui::separator(),
-            table_->Render() //| ftxui::vscroll_indicator | ftxui::yframe | ftxui::center
+            table_->Render() | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center,
+            instructions_
           }));
           return table_cached_;
         }

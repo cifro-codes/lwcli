@@ -44,61 +44,10 @@ namespace lwcli { namespace view
 {
   namespace
   {
-// Notice for next two functions
-
-// Copyright (c) 2014-2024, The Monero Project
-// 
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification, are
-// permitted provided that the following conditions are met:
-// 
-// 1. Redistributions of source code must retain the above copyright notice, this list of
-//    conditions and the following disclaimer.
-// 
-// 2. Redistributions in binary form must reproduce the above copyright notice, this list
-//    of conditions and the following disclaimer in the documentation and/or other
-//    materials provided with the distribution.
-// 
-// 3. Neither the name of the copyright holder nor the names of its contributors may be
-//    used to endorse or promote products derived from this software without specific
-//    prior written permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
-// THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-// STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// 
-// Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
-
-    constexpr const unsigned int default_decimal_point = 12;
-    void insert_money_decimal_point(std::string &s, unsigned int decimal_point)
-    {
-      if (decimal_point == (unsigned int)-1)
-        decimal_point = default_decimal_point;
-      if(s.size() < decimal_point+1)
-      {
-        s.insert(0, decimal_point+1 - s.size(), '0');
-      }
-      if (decimal_point > 0)
-        s.insert(s.size() - decimal_point, ".");
-    }
-    std::string print_money(const std::uint64_t amount)
-    {
-      std::string s = std::to_string(amount);
-      insert_money_decimal_point(s, default_decimal_point);
-      return s;
-    }
-
     std::string print_amount(std::uint64_t amount, int direction)
     {
       const bool negate = direction == Monero::TransactionInfo::Direction_Out;
-      return (negate ? "-" : "") + print_money(amount);
+      return (negate ? "-" : "") + lwsf::displayAmount(amount);
     }
 
     std::string print_amount(const Monero::TransactionInfo& tx)
@@ -154,7 +103,7 @@ namespace lwcli { namespace view
             text = _("Transfers: ");
           grid.push_back({
             ftxui::text(std::move(text)),
-            ftxui::text(print_money(transfer.amount) + address)
+            ftxui::text(lwsf::displayAmount(transfer.amount) + address)
           });
         }
 
@@ -212,7 +161,7 @@ namespace lwcli { namespace view
         }
         payment_id_ = {ftxui::text(_("Payment ID: ")), ftxui::text(info_->paymentId())};
         amount_ = {ftxui::text(_("Amount: ")), ftxui::text(print_amount(*info_))};
-        fee_ = {ftxui::text(_("Fee: ")), ftxui::text(print_money(info_->fee()))};
+        fee_ = {ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(info_->fee()))};
         {
           std::string minors;
           for (const std::uint32_t minor : info_->subaddrIndex())
@@ -272,34 +221,35 @@ namespace lwcli { namespace view
           row_map_(),
           account_(account)
       {
-        Monero::Subaddress* subaddress = wallet_->subaddress();
-        if (!subaddress)
-          throw std::runtime_error{"unexpected subaddress nullptr"};
-        subaddress->refresh(account_);
+        if (!wallet_)
+          throw std::invalid_argument{"lwcli::view::history given nullptr"};
 
-        std::string address = _("Account ") + std::to_string(account_);
-        const auto subaddresses = subaddress->getAll();
-        if (!subaddresses.empty() && *subaddresses.begin())
-          address += ": " + (*subaddresses.begin())->getAddress();
-
-        title_ = ftxui::text(std::move(address));
+        {
+          std::string address = _("Account #") + std::to_string(account_);
+          address.append(" / ").append(wallet_->getSubaddressLabel(account_, 0)).append(" / ");
+          address.append(wallet_->address(account_, 0).substr(0, 20)).append("...");
+          title_ = ftxui::text(std::move(address));
+        }
 
         // perform transalation lookup once
         table_ = component::table(
-          {_("Date"), _("Amount"), _("Payment ID"), _("Desription"), _("Block"), _("Fee"), _("Hash")},
+          {_("Date"), _("Amount"), _("Payment ID"), _("Label"), _("Desription"), _("Block"), _("Fee"), _("Hash")},
           [this] () { return transaction_list(); },
-          [this] (std::size_t i) { return add_overlay(i); }
+          [this] (ftxui::Event e, std::size_t i) { return add_overlay(e, i); }
         );
 
         Add(table_);
       }
 
-      bool add_overlay(const std::size_t i)
+      bool add_overlay(const ftxui::Event& e, const std::size_t i)
       {
-        if (overlay_)
-          overlay_->Detach();
-        overlay_ = std::make_shared<tx_details>(wallet_->history(), row_map_.at(i));
-        Add(overlay_);
+        if (e == ftxui::Event::Return)
+        {
+          if (overlay_)
+            overlay_->Detach();
+          overlay_ = std::make_shared<tx_details>(wallet_->history(), row_map_.at(i));
+          Add(overlay_);
+        }
         return true;
       }
 
@@ -390,13 +340,24 @@ namespace lwcli { namespace view
 
           char const* const extended_payment_id = 16 < payment_id.size() ?
             "..." : "";
+
+          std::string label;
+          const std::set<std::uint32_t> subaddrs = tx->subaddrIndex();
+          if (!subaddrs.empty())
+          {
+            const std::uint32_t index = *subaddrs.begin();
+            if (index)
+              label = wallet_->getSubaddressLabel(account_, index);
+          }
+
           rows.push_back({
             std::string{date},
             print_amount(amount, direction),
             payment_id.substr(0, 16) + extended_payment_id,
+            std::move(label),
             tx->description(),
             std::to_string(tx->blockHeight()),
-            print_money(tx->fee()),
+            lwsf::displayAmount(tx->fee()),
             tx->hash().substr(0, 16) + "..."
           });
 
@@ -415,7 +376,7 @@ namespace lwcli { namespace view
           auto table = table_->Render(); // compute balance first in callback 
           table_cached_ = ftxui::vbox({
             title_,
-            ftxui::text(_("Balance: ") + print_money(balance_)),
+            ftxui::text(_("Balance: ") + lwsf::displayAmount(balance_)),
             std::move(table) | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center | ftxui::flex
           }); 
           return table_cached_;
