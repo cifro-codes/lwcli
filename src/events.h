@@ -47,4 +47,11 @@ namespace lwcli { namespace event
   extern const ftxui::Event lock_wallet;
   extern const ftxui::Event refresh_wallet;
   extern const ftxui::Event send_async;
+
+  inline bool is_left_click(ftxui::Event& e) noexcept
+  { return e.is_mouse() && e.mouse().button == ftxui::Mouse::Left && e.mouse().motion == ftxui::Mouse::Pressed; }
+
+  inline bool is_right_click(ftxui::Event& e) noexcept
+  { return e.is_mouse() && e.mouse().button == ftxui::Mouse::Right && e.mouse().motion == ftxui::Mouse::Pressed; }
+
 }} // lwcli // event

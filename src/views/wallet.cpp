@@ -155,7 +155,7 @@ namespace lwcli { namespace view
           else if (state_.overlay)
             state_.overlay->OnEvent(std::move(event));
           else if (event == ftxui::Event::CtrlQ)
-            throw event::close{};
+            return history_->OnEvent(std::move(event));
           else if (!ui_->OnEvent(event))
           {
             if (event == ftxui::Event::s || event == ftxui::Event::S)

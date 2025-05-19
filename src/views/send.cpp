@@ -233,6 +233,7 @@ namespace lwcli { namespace view
       const ftxui::Element title_;
       std::vector<std::shared_ptr<dest_pair>> dests_;
       std::vector<buttons_tuple> dests_ui_;
+      const ftxui::Decorator min_amount_size;
       ftxui::Component overlay_;
       ftxui::Component buttons_;
       ftxui::Element error_;
@@ -260,6 +261,7 @@ namespace lwcli { namespace view
           title_(ftxui::text(_("Send from account #") + std::to_string(account) + " (" + lwsf::displayAmount(wal_->unlockedBalance(account)) + " XMR available)")),
           dests_(),
           dests_ui_(),
+          min_amount_size(ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 5)),
           overlay_(),
           buttons_(),
           error_(),
@@ -498,7 +500,7 @@ namespace lwcli { namespace view
             {
               ftxui::Elements row;
               row.reserve(6);
-              row.push_back(std::get<0>(e)->Render());
+              row.push_back(std::get<0>(e)->Render() | min_amount_size);
               row.push_back(ftxui::text(" XMR to "));
               row.push_back(std::get<1>(e)->Render());
               if (!animate)

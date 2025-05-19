@@ -221,10 +221,10 @@ namespace lwcli { namespace view
         Add(ui_);
       }
 
-      bool display_details(const ftxui::Event& e, const std::size_t index)
+      bool display_details(ftxui::Event& e, const std::size_t index)
       {
-        if (e != ftxui::Event::Return)
-          return true;
+        if (details_ || (e != ftxui::Event::Return && !event::is_left_click(e)))
+          return false;
 
         const std::size_t minor = row_map_.at(index);
         if (std::numeric_limits<std::uint32_t>::max() < minor)
@@ -355,18 +355,22 @@ namespace lwcli { namespace view
         Add(ui_);
       }
 
-      bool display_details(const ftxui::Event& e, const std::size_t index)
+      bool display_details(ftxui::Event& e, const std::size_t index)
       {
-        if (e == ftxui::Event::Return)
+        if (!details_ && (e == ftxui::Event::Return || event::is_left_click(e)))
         {
           if (details_)
             details_->Detach();
           details_ = std::make_shared<account_detail>(wal_, wal_->subaddress(), row_map_.at(index));
           Add(details_);
+          return true;
         }
-        else if (e == ftxui::Event::l || e == ftxui::Event::L)
+        else if (e == ftxui::Event::l || e == ftxui::Event::L || event::is_right_click(e))
+        {
           *account_ = row_map_.at(index);
-        return true;
+          return true;
+        }
+        return false;
       } 
 
       bool OnEvent(ftxui::Event event) override final

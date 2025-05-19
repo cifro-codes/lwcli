@@ -199,7 +199,6 @@ namespace lwcli { namespace view
       ftxui::Element title_;
       ftxui::Element table_cached_; //!< Does not redraw when child is enabled
       std::unordered_map<std::size_t, std::size_t> row_map_;
-      std::uint64_t balance_;
       const std::uint32_t account_;
 
       bool Focusable() const override final { return true; }
@@ -241,16 +240,15 @@ namespace lwcli { namespace view
         Add(table_);
       }
 
-      bool add_overlay(const ftxui::Event& e, const std::size_t i)
+      bool add_overlay(ftxui::Event& e, const std::size_t i)
       {
-        if (e == ftxui::Event::Return)
+        if (!overlay_ && (e == ftxui::Event::Return || event::is_left_click(e)))
         {
-          if (overlay_)
-            overlay_->Detach();
           overlay_ = std::make_shared<tx_details>(wallet_->history(), row_map_.at(i));
           Add(overlay_);
+          return true;
         }
-        return true;
+        return false;
       }
 
       bool OnEvent(ftxui::Event event) override final
@@ -298,7 +296,6 @@ namespace lwcli { namespace view
             ordered.try_emplace({tx->blockHeight(), tx->hash()}, tx, i);
         }
 
-        balance_ = 0;
         std::vector<std::vector<std::string>> rows;
         rows.reserve(ordered.size() + 2);
 
@@ -312,19 +309,7 @@ namespace lwcli { namespace view
           const std::uint64_t amount = tx->amount();
           const int direction = tx->direction();
           const std::uint64_t fee = tx->fee();
-
-        
-          if (!tx->isFailed())
-          {
-            if (direction == Monero::TransactionInfo::Direction_Out)
-            {
-              balance_ -= amount;
-              balance_ -= fee;
-            }
-            else
-              balance_ += amount;
-          }
-
+ 
           std::tm expanded{};
           const std::time_t timestamp = tx->timestamp();
           if (!gmtime_r(std::addressof(timestamp), std::addressof(expanded)))
@@ -376,7 +361,7 @@ namespace lwcli { namespace view
           auto table = table_->Render(); // compute balance first in callback 
           table_cached_ = ftxui::vbox({
             title_,
-            ftxui::text(_("Balance: ") + lwsf::displayAmount(balance_)),
+            ftxui::text(_("Balance: ") + lwsf::displayAmount(wallet_->balance(account_))),
             std::move(table) | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center | ftxui::flex
           }); 
           return table_cached_;

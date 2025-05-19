@@ -43,8 +43,12 @@ namespace lwcli { namespace component
       const table_generator generator_;
       const table_on_key key_;
       const std::vector<std::vector<std::string>> title_;
+      std::vector<std::array<ftxui::Box, 2>> boxes_;
+      ftxui::Box box_;
       std::ptrdiff_t rows_;
       std::ptrdiff_t selected_;
+      std::ptrdiff_t highlighted_;
+      const std::size_t columns_;
 
       static constexpr std::ptrdiff_t min_row() noexcept { return 0; };
       bool Focusable() const override final { return true; }
@@ -67,8 +71,12 @@ namespace lwcli { namespace component
           generator_(std::move(generator)),
           key_(std::move(key)),
           title_(get_title_bar(std::move(title))),
+          boxes_(),
+          box_(),
           rows_(0),
-          selected_(-1)
+          selected_(-1),
+          highlighted_(-1),
+          columns_(title_.empty() ? 0 : title_.at(0).size())
       {
         set_size(generator_().size());
       }
@@ -88,12 +96,43 @@ namespace lwcli { namespace component
 
       bool OnEvent(ftxui::Event event) override final
       {
-        if (event.is_mouse())
+        const auto original = selected_;
+        if (event.is_mouse() && box_.Contain(event.mouse().x, event.mouse().y))
         {
           if (event.mouse().button == ftxui::Mouse::WheelDown && can_increment())
+          {
             ++selected_;
+            if (!Focused())
+              TakeFocus();
+          }
           else if (event.mouse().button == ftxui::Mouse::WheelUp && can_decrement())
+          {
             --selected_;// = std::max(min_row(), selected_ - 1);
+            if (!Focused())
+              TakeFocus();
+          }
+          else
+          {
+            highlighted_ = -1;
+            const auto x = event.mouse().x;
+            const auto y = event.mouse().y;
+
+            const auto match = std::lower_bound(boxes_.begin(), boxes_.end(), y, [] (const auto& lhs, const auto rhs) {
+              return std::get<0>(lhs).y_min < rhs;
+            });
+
+            if (match != boxes_.end() && ftxui::Box::Union(std::get<0>(*match), std::get<1>(*match)).Contain(x, y)) 
+            {
+              const std::size_t i = match - boxes_.begin();
+              highlighted_ = i;
+              if (key_(event, i))
+              {
+                selected_ = i;
+                TakeFocus();
+              }
+              return true; 
+            }
+          }
         }
         else if (event == ftxui::Event::ArrowDown && can_increment())
           ++selected_;
@@ -106,6 +145,8 @@ namespace lwcli { namespace component
         else if (min_row() <= selected_ && selected_ < rows_)
           return key_(std::move(event), std::size_t(selected_)); 
 
+        if (original != selected_)
+          highlighted_ = -1;
         return min_row() <= selected_ && selected_ - min_row() < rows_;
       }
 
@@ -123,7 +164,22 @@ namespace lwcli { namespace component
           auto title = table.SelectRow(0);
           title.Decorate(ftxui::bold);
           title.SeparatorVertical(ftxui::LIGHT);
-          //title.Border(ftxui::LIGHT);
+        }
+
+        if (columns_)
+        {
+          const std::size_t offset = title_.size();
+          boxes_.resize(rows_);
+          for (std::size_t i = offset; i < rows_ + offset; ++i)
+          {
+            auto& boxes = boxes_.at(i - offset);
+
+            auto cell1 = table.SelectCell(0, i);
+            cell1.DecorateCells(ftxui::reflect(std::get<0>(boxes)));
+
+            auto cell2 = table.SelectCell(columns_ - 1, i);
+            cell2.DecorateCells(ftxui::reflect(std::get<1>(boxes)));
+          }
         }
           
         if (Focused())
@@ -132,16 +188,24 @@ namespace lwcli { namespace component
             selected_ = min_row();
           else if (rows_ <= selected_ - min_row())
             selected_ = rows_ - 1 + min_row();
-        }
 
-        if (min_row() <= selected_ && selected_ < rows_)
+          if (min_row() <= selected_ && selected_ < rows_)
+          {
+            auto row = table.SelectRow(std::size_t(selected_) + title_.size());
+            row.Decorate(ftxui::inverted);
+            row.Decorate(ftxui::focus);
+          }
+        }
+        else
+          selected_ = -1;
+
+        if (selected_ != highlighted_ && min_row() <= highlighted_ && highlighted_ < rows_)
         {
-          auto row = table.SelectRow(std::size_t(selected_) + title_.size());
+          auto row = table.SelectRow(std::size_t(highlighted_) + title_.size());
           row.Decorate(ftxui::inverted);
-          row.Decorate(ftxui::focus);
         }
 
-        return table.Render();
+        return table.Render() | ftxui::reflect(box_);
       }
     };
   } // anonymous
