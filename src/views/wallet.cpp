@@ -62,6 +62,7 @@ namespace lwcli { namespace view
     {
       const std::shared_ptr<Monero::Wallet> wal = state->wal;
       return ftxui::Container::Horizontal({
+        ftxui::Button("[c]lose", [] () { throw event::close{}; }, ascii()),
         ftxui::Button("[s]end", [state] () { state->overlay = send(state->wm, state->wal, state->selected_account); }, ascii()),
         ftxui::Button("[a]ccounts", [state] () { state->overlay = accounts(state->wal, &state->selected_account); }, ascii()),
         ftxui::Button("[r]efresh", [wal] () { wal->refreshAsync(); }, ascii()),
@@ -158,7 +159,9 @@ namespace lwcli { namespace view
             return history_->OnEvent(std::move(event));
           else if (!ui_->OnEvent(event))
           {
-            if (event == ftxui::Event::s || event == ftxui::Event::S)
+            if (event == ftxui::Event::c || event == ftxui::Event::C)
+              throw event::close{};
+            else if (event == ftxui::Event::s || event == ftxui::Event::S)
               state_.overlay = send(state_.wm, state_.wal, state_.selected_account);
             else if (event == ftxui::Event::a || event == ftxui::Event::a)
               state_.overlay = accounts(state_.wal, &state_.selected_account);

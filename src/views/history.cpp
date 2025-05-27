@@ -196,8 +196,9 @@ namespace lwcli { namespace view
       const std::shared_ptr<Monero::Wallet> wallet_;
       ftxui::Component table_;
       ftxui::Component overlay_;
-      ftxui::Element title_;
       ftxui::Element table_cached_; //!< Does not redraw when child is enabled
+      const std::string title1_;
+      const std::string title2_;
       std::unordered_map<std::size_t, std::size_t> row_map_;
       const std::uint32_t account_;
 
@@ -209,27 +210,27 @@ namespace lwcli { namespace view
         return table_;
       }
 
+      ftxui::Element get_title() const
+      {
+        // UI can modify label at any time
+        return ftxui::text(title1_ + wallet_->getSubaddressLabel(account_, 0) + title2_);
+      }
+
     public:
       explicit history_(std::shared_ptr<Monero::Wallet>&& wallet, std::uint32_t account)
         : ftxui::ComponentBase(),
           wallet_(std::move(wallet)),
           table_(),
           overlay_(nullptr),
-          title_(nullptr),
           table_cached_(nullptr),
+          title1_(_("Account #") + std::to_string(account) + " / "),
+          title2_(" / " + wallet_->address(account, 0).substr(0, 20) + "..."),
           row_map_(),
           account_(account)
       {
         if (!wallet_)
           throw std::invalid_argument{"lwcli::view::history given nullptr"};
-
-        {
-          std::string address = _("Account #") + std::to_string(account_);
-          address.append(" / ").append(wallet_->getSubaddressLabel(account_, 0)).append(" / ");
-          address.append(wallet_->address(account_, 0).substr(0, 20)).append("...");
-          title_ = ftxui::text(std::move(address));
-        }
-
+ 
         // perform transalation lookup once
         table_ = component::table(
           {_("Date"), _("Amount"), _("Payment ID"), _("Label"), _("Desription"), _("Block"), _("Fee"), _("Hash")},
@@ -341,7 +342,7 @@ namespace lwcli { namespace view
             payment_id.substr(0, 16) + extended_payment_id,
             std::move(label),
             tx->description(),
-            std::to_string(tx->blockHeight()),
+            tx->isPending() ? "Pending" : tx->isFailed() ? "Failed" : std::to_string(tx->blockHeight()),
             lwsf::displayAmount(tx->fee()),
             tx->hash().substr(0, 16) + "..."
           });
@@ -360,7 +361,7 @@ namespace lwcli { namespace view
         {
           auto table = table_->Render(); // compute balance first in callback 
           table_cached_ = ftxui::vbox({
-            title_,
+            get_title(),
             ftxui::text(_("Balance: ") + lwsf::displayAmount(wallet_->balance(account_))),
             std::move(table) | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center | ftxui::flex
           }); 

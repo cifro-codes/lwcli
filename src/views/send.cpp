@@ -231,18 +231,21 @@ namespace lwcli { namespace view
       const std::shared_ptr<Monero::WalletManager> wm_;
       const std::shared_ptr<Monero::Wallet> wal_;
       const ftxui::Element title_;
+      const std::vector<std::string> priority_names_;
       std::vector<std::shared_ptr<dest_pair>> dests_;
       std::vector<buttons_tuple> dests_ui_;
+      unsigned animation_;
+      int priority_;
       const ftxui::Decorator min_amount_size;
       ftxui::Component overlay_;
       ftxui::Component buttons_;
+      const ftxui::Component priority_menu_;
       ftxui::Element error_;
       ftxui::Component ui_;
       ftxui::Element cached_;
       std::future<std::tuple<std::string, std::shared_ptr<dest_pair>, bool>> oa_;
       std::future<std::tuple<std::shared_ptr<Monero::PendingTransaction>, dest_group, std::string>> tx_;
       const std::uint32_t account_;
-      unsigned animation_;
       bool closing_;
 
       bool Focusable() const override final { return true; }
@@ -253,24 +256,34 @@ namespace lwcli { namespace view
         return ui_; 
       }
 
+      static ftxui::MenuOption toggle(const int focused)
+      {
+        auto options = ftxui::MenuOption::Toggle();
+        options.focused_entry = focused;
+        return options;
+      }
+
     public:
       explicit send_(std::shared_ptr<Monero::WalletManager>&& wm, std::shared_ptr<Monero::Wallet>&& wal, const std::uint32_t account)
         : ftxui::ComponentBase(),
           wm_(std::move(wm)),
           wal_(std::move(wal)),
           title_(ftxui::text(_("Send from account #") + std::to_string(account) + " (" + lwsf::displayAmount(wal_->unlockedBalance(account)) + " XMR available)")),
+          priority_names_({_("Auto"), _("Unimportant"), _("Normal"), _("Elevated"), _("Priority")}),
           dests_(),
           dests_ui_(),
+          animation_(0),
+          priority_(2),
           min_amount_size(ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 5)),
           overlay_(),
           buttons_(),
+          priority_menu_(ftxui::Menu(&priority_names_, &priority_, toggle(priority_))),
           error_(),
           ui_(),
           cached_(),
           oa_(),
           tx_(),
           account_(account),
-          animation_(0),
           closing_(false)
       {
         buttons_ = ftxui::Container::Horizontal({
@@ -312,8 +325,9 @@ namespace lwcli { namespace view
       void update_ui()
       {
         ftxui::Components ui;
-        ui.reserve(dests_ui_.size() + 1);
+        ui.reserve(dests_ui_.size() + 2);
         ui.push_back(buttons_);
+        ui.push_back(priority_menu_);
         for (const auto& e : dests_ui_)
           ui.push_back(ftxui::Container::Horizontal({std::get<0>(e), std::get<1>(e), std::get<2>(e), std::get<3>(e)}));
 
@@ -341,13 +355,13 @@ namespace lwcli { namespace view
 
         for (const auto& dest : dests_)
         {
-          const std::uint64_t amount = lwsf::amountFromString(dest->first);
-          if (!amount)
+          const std::optional<std::uint64_t> amount = lwsf::amountFromString(dest->first);
+          if (!amount || *amount == 0)
           {
             error_ = ftxui::text("Invalid amount");
             return;
           }
-          dests.second.push_back(amount);
+          dests.second.push_back(*amount);
 
           if (!lwsf::addressValid(dest->second, wal_->nettype()))
           {
@@ -372,7 +386,7 @@ namespace lwcli { namespace view
           dests.first.push_back(dest->second);
         }
 
-        const auto tx_construct = [] (std::shared_ptr<Monero::Wallet> wal, dest_group dests, const std::uint32_t account)
+        const auto tx_construct = [] (std::shared_ptr<Monero::Wallet> wal, dest_group dests, const std::uint32_t account, const int priority)
           -> std::tuple<std::shared_ptr<Monero::PendingTransaction>, dest_group, std::string>
         {
           const auto dispose = [wal] (Monero::PendingTransaction* ptr)
@@ -382,7 +396,7 @@ namespace lwcli { namespace view
           };
 
           std::shared_ptr<Monero::PendingTransaction> tx{
-            wal->createTransactionMultDest(dests.first, {}, dests.second, 0 /*mixin_count*/, Monero::PendingTransaction::Priority_Default, account),
+            wal->createTransactionMultDest(dests.first, {}, dests.second, 0 /*mixin_count*/, Monero::PendingTransaction::Priority(priority), account),
             dispose
           };
           if (!tx)
@@ -392,7 +406,7 @@ namespace lwcli { namespace view
           return {nullptr, {}, tx->errorString()};
         };
 
-        tx_ = std::async(std::launch::async, tx_construct, wal_, std::move(dests), account_);
+        tx_ = std::async(std::launch::async, tx_construct, wal_, std::move(dests), account_, priority_);
       }
 
       bool OnEvent(ftxui::Event event) override final
@@ -444,10 +458,10 @@ namespace lwcli { namespace view
               error_ = ftxui::text(_("OpenAlias record is invalid for ") + std::get<1>(oa)->second);
             else if (!closing_)
             {
-	      std::get<1>(oa)->second = std::move(std::get<0>(oa));
+              std::get<1>(oa)->second = std::move(std::get<0>(oa));
               if (!std::get<2>(oa))
                 error_ = ftxui::text(_("dnssec verification failure for ") + std::get<1>(oa)->second);
-	      else
+              else
                 try_construct();
             }
 
@@ -482,7 +496,7 @@ namespace lwcli { namespace view
         if (!overlay_)
         {
           ftxui::Elements rows;
-          rows.reserve(3); // dests_ui_.size() + 2);
+          rows.reserve(5);
 
           if (!animate)
             rows.push_back(buttons_->Render() | ftxui::hcenter);
@@ -491,6 +505,13 @@ namespace lwcli { namespace view
             rows.push_back(decorate::banner(error_) | ftxui::inverted);
           else
             rows.push_back(ftxui::separator());
+
+          if (!animate)
+          {
+            rows.push_back(priority_menu_->Render() | ftxui::hcenter);
+            //rows.push_back(ftxui::hbox({ftxui::filler(), priority_menu_->Render(), ftxui::filler()}));
+            rows.push_back(ftxui::separator());
+          }
 
           if (!closing_)
           {
