@@ -578,6 +578,10 @@ namespace lwcli { namespace view
           elements.push_back({elem.first, ftxui::xflex_grow(elem.second->Render())});
 
         ftxui::Elements out{
+          ftxui::text("       ○━━━━━━━━━━━━┓           ") | ftxui::hcenter,
+          ftxui::text("┃ LWCLI.CIFRO.CODES ┃   _M_onero") | ftxui::hcenter,
+          ftxui::text("┗━━━━━━━━━━━━○                  ") | ftxui::hcenter,
+          ftxui::text(""),
           help_,
           disclaimer_,
           decorate::banner(mode_->Render()),
@@ -591,8 +595,8 @@ namespace lwcli { namespace view
 
         const auto base = ftxui::hcenter(ftxui::xflex_grow(ftxui::vbox(std::move(out)))); 
         if (state_.overlay)
-          return ftxui::window(title_, ftxui::dbox(base, decorate::overlay(state_.overlay->Render())));
-        return ftxui::window(title_, base);
+          return ftxui::dbox(base, decorate::overlay(state_.overlay->Render()));
+        return base;
       }
     };
 
