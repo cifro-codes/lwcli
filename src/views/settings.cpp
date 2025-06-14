@@ -173,6 +173,53 @@ namespace lwcli { namespace view
       }
     };
 
+    class show_keys_ final : public ftxui::ComponentBase
+    {
+      const ftxui::Element title_;
+      const ftxui::Component buttons_;
+      const ftxui::Element display_;
+
+      bool Focusable() const override final { return true; }
+      ftxui::Component ActiveChild() override final { return buttons_; }
+
+      static ftxui::Element get_keys(const std::shared_ptr<Monero::Wallet>& wal)
+      {
+        return ftxui::vbox({
+          ftxui::paragraph(wal->seed()),
+          ftxui::separator(),
+          ftxui::gridbox({
+            {ftxui::text("View Public: "), ftxui::text(wal->publicViewKey())},
+            {ftxui::text("Spend Public: "), ftxui::text(wal->publicSpendKey())},
+            {ftxui::text("View Key: "), ftxui::text(wal->secretViewKey())},
+            {ftxui::text("Spend Key: "), ftxui::text(wal->secretSpendKey())}
+          })
+        });
+      }
+
+    public:
+      explicit show_keys_(const std::shared_ptr<Monero::Wallet>& wal)
+        : ftxui::ComponentBase(),
+          title_(ftxui::text(_("Wallet (Secret) Keys"))),
+          buttons_(ftxui::Button(_("Close"), [] () { throw event::close{}; }, ascii())),
+          display_(get_keys(wal))
+      {}
+
+      bool OnEvent(ftxui::Event event) override final
+      {
+        buttons_->OnEvent(std::move(event));
+        return true;
+      }
+
+      ftxui::Element OnRender() override final
+      {
+        return ftxui::window(title_, ftxui::vbox({
+          ftxui::hcenter(buttons_->Render()),
+          ftxui::separator(),
+          display_
+        }));
+      }
+    };
+
     class settings_ final : public ftxui::ComponentBase
     {
       const std::shared_ptr<Monero::Wallet> wal_;
@@ -181,9 +228,16 @@ namespace lwcli { namespace view
       std::string error_;
       ftxui::Component buttons_;
       ftxui::Component ui_;
+      ftxui::Component overlay_;
+      ftxui::Element cached_;
 
       bool Focusable() const override final { return true; }
-      ftxui::Component ActiveChild() override final { return ui_; }
+      ftxui::Component ActiveChild() override final
+      {
+        if (overlay_)
+          return overlay_;
+        return ui_;
+      }
 
     public:
       explicit settings_(std::shared_ptr<Monero::Wallet>&& wal)
@@ -193,7 +247,9 @@ namespace lwcli { namespace view
           config_(std::make_unique<configuration>(*wal_)),
           error_(),
           buttons_(),
-          ui_()
+          ui_(),
+          overlay_(),
+          cached_()
       {
         buttons_ = ftxui::Container::Horizontal({
           ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
@@ -202,7 +258,8 @@ namespace lwcli { namespace view
             config_->store(*wal_, error_);
             if (error_.empty())
               throw event::close{};
-          }, ascii())
+          }, ascii()),
+          ftxui::Button(_("Secret Keys"), [this] () { show_keys(); }, ascii())
         });
 
         ftxui::Components ui;
@@ -215,16 +272,39 @@ namespace lwcli { namespace view
         Add(ui_);
       }
 
+      void show_keys()
+      {
+        overlay_ = std::make_shared<show_keys_>(wal_);
+        Add(overlay_);
+      }
+
       bool OnEvent(ftxui::Event event) override final
       {
-        if (event == ftxui::Event::CtrlQ)
-          throw event::close{};
-        ui_->OnEvent(std::move(event));
+        try
+        {
+          if (overlay_)
+            return overlay_->OnEvent(std::move(event));
+          else if (event == ftxui::Event::CtrlQ)
+            throw event::close{};
+          ui_->OnEvent(std::move(event));
+        }
+        catch (const event::close&)
+        {
+          if (!overlay_)
+            throw;
+          overlay_->Detach();
+          overlay_.reset();
+        }
         return true;
       }
 
       ftxui::Element OnRender() override final
       {
+        if (overlay_)
+        {
+          return ftxui::dbox({cached_, decorate::overlay(overlay_->Render())});
+        }
+
         const auto min_size = ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 5);
         std::vector<ftxui::Elements> grid;
         grid.reserve(config_->states.size());
@@ -237,11 +317,12 @@ namespace lwcli { namespace view
         else
           highlighted = ftxui::inverted(ftxui::text(error_));
 
-        return ftxui::window(title_, ftxui::vbox({
+        cached_ = ftxui::window(title_, ftxui::vbox({
           ftxui::hcenter(buttons_->Render()),
           highlighted,
           ftxui::gridbox(std::move(grid))
         }));
+        return cached_;
       }
     };
   }

@@ -577,11 +577,10 @@ namespace lwcli { namespace view
         for (const auto& elem : stack_)
           elements.push_back({elem.first, ftxui::xflex_grow(elem.second->Render())});
 
-          //ftxui::hbox({ftxui::text("┃ TWOUI.CIFRO.CODES ┃"), ftxui::filler(), ftxui::text("┃ 2 ┃"), ftxui::filler(), ftxui::text("         ┃ _M_onero ┃")}),
-        ftxui::Elements out{                                                                                                        //TWOUI.CIFRO.CODES
-          ftxui::hbox({ftxui::text("     ○━━━━━━━━┓"), ftxui::filler(), ftxui::text("    ○━━━━━┓"), ftxui::filler(), ftxui::text("    ○━━━━━━┓")}),
-          ftxui::hbox({ftxui::text("┃ cifro.codes ┃"), ftxui::filler(), ftxui::text("┃ z85.pub ┃"), ftxui::filler(), ftxui::text("┃ _M_onero ┃")}),
-          ftxui::hbox({ftxui::text("┗━━━━━━━━▶     "), ftxui::filler(), ftxui::text("┗━━━━━▶    "), ftxui::filler(), ftxui::text("┗━━━━━━▶    ")}),
+        ftxui::Elements out{
+          ftxui::text("  ○━━━━━━━━━━━━━━━━━┓") | ftxui::hcenter,
+          ftxui::text("┃ lwcli.cifro.codes ┃") | ftxui::hcenter,
+          ftxui::text("┗━━━━━━━━━━━━━━━━━▶  ") | ftxui::hcenter,
           ftxui::separator(),
           help_,
           disclaimer_,
@@ -592,7 +591,7 @@ namespace lwcli { namespace view
           decorate::banner(completion_->Render())
         };
         if (!state_.error.empty())
-          out[3] = ftxui::inverted(decorate::banner(ftxui::text(state_.error)));
+          out[7] = ftxui::inverted(decorate::banner(ftxui::text(state_.error)));
 
         const auto base = ftxui::hcenter(ftxui::xflex_grow(ftxui::vbox(std::move(out)))); 
         if (state_.overlay)
