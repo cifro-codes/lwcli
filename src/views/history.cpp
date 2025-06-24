@@ -155,7 +155,7 @@ namespace lwcli { namespace view
             throw std::runtime_error{"gmtime failure"};
 
           char buf[100] = {0};
-          if (sizeof(buf) <= std::strftime(buf, sizeof(buf), "%B %m %Y %I:%M:%S", std::addressof(expanded)))
+          if (sizeof(buf) <= std::strftime(buf, sizeof(buf), "%B %d %Y %I:%M:%S UTC", std::addressof(expanded)))
             throw std::runtime_error{"strftime failed"};
           timestamp_ = {ftxui::text(_("Timestamp: ")), ftxui::text(buf)};
         }
