@@ -40,6 +40,7 @@ endif()
 include(FetchContent)
 FetchContent_Declare(lwsf SOURCE_DIR "${lwcli_SOURCE_DIR}/external/lwsf")
 
+set(LWSF_MASTER_ENABLE "ON")
 if (NOT lwsf_POPULATED)
   FetchContent_MakeAvailable(lwsf)
 endif ()
