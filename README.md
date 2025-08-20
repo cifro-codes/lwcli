@@ -9,6 +9,7 @@ This was _not_ billed/paid for by Monero CCS, as I'm not sure if there are real 
 git clone https://github.com/monero-project/monero.git
 git clone https://github.com/cifro-codes/lwcli.git
 cd lwcli && mkdir build && cd build
+git submodules update --init --recursive
 cmake -DCMAKE_BUILD_TYPE=Release -DMONERO_SOURCE_DIR=../../monero ..
 make -j$(nproc)
 ./src/lwcli -h
