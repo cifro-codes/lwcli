@@ -358,11 +358,13 @@ namespace lwcli { namespace view
       {
         start_state* state;
         std::string spend_key;
+        std::string view_key;
+        std::string address;
         std::string height;
         new_wallet config;
 
         options(std::string default_file, start_state* state)
-          : state(state), spend_key(), height("0"), config(std::move(default_file))
+          : state(state), spend_key(), view_key(), address(), height("0"), config(std::move(default_file))
         {}
       };
       auto enclosed = std::make_shared<options>(std::move(default_file), state);
@@ -392,8 +394,8 @@ namespace lwcli { namespace view
                 enclosed->config.language,
                 config::network,
                 *height,
-                "address",
-                "view_key",
+                enclosed->address,
+                enclosed->view_key,
                 enclosed->spend_key
               ),
               &enclosed->state->error
@@ -426,8 +428,10 @@ namespace lwcli { namespace view
         {
           {ftxui::text(_("Filename: ")), last_input(&enclosed->config.file)},
           {ftxui::text(_("Password: ")), password(&enclosed->config.password)},
-          {ftxui::text(_("Confirm: ")), password(&enclosed->config.password)},
+          {ftxui::text(_("Confirm: ")), password(&enclosed->config.confirm)},
           {ftxui::text(_("Spend key: ")), last_input(&enclosed->spend_key)},
+          {ftxui::text(_("View key: ")), last_input(&enclosed->view_key)},
+          {ftxui::text(_("Address: ")), last_input(&enclosed->address)},
           {ftxui::text(_("Height: ")), last_input(&enclosed->height)},
           {ftxui::text(_("Language: ")), last_input(&enclosed->config.language)},
           {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
