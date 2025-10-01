@@ -356,7 +356,7 @@ namespace lwcli { namespace view
         for (const auto& dest : dests_)
         {
           const std::optional<std::uint64_t> amount = lwsf::amountFromString(dest->first);
-          if (!amount || *amount == 0)
+          if (!amount || (*amount == 0 && dests_.size() != 1))
           {
             error_ = ftxui::text("Invalid amount");
             return;
@@ -395,8 +395,12 @@ namespace lwcli { namespace view
               wal->disposeTransaction(ptr);
           };
 
+          Monero::optional<std::vector<std::uint64_t>> amounts;
+          if (1 <= dests.second.size() && dests.second.back() != 0)
+            amounts = dests.second;
+
           std::shared_ptr<Monero::PendingTransaction> tx{
-            wal->createTransactionMultDest(dests.first, {}, dests.second, 0 /*mixin_count*/, Monero::PendingTransaction::Priority(priority), account),
+            wal->createTransactionMultDest(dests.first, {}, std::move(amounts), 0 /*mixin_count*/, Monero::PendingTransaction::Priority(priority), account),
             dispose
           };
           if (!tx)
