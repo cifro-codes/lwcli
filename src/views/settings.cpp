@@ -220,6 +220,93 @@ namespace lwcli { namespace view
       }
     };
 
+    class password_prompt_ final : public ftxui::ComponentBase
+    {
+      std::string password_;
+      std::string error_;
+      std::shared_ptr<Monero::Wallet> wal_;
+      ftxui::Component* overlay_;
+      const ftxui::Element title_;
+      const ftxui::Component buttons_;
+      const ftxui::Component prompt_;
+      const ftxui::Component ui_;
+      const ftxui::Element display_;
+
+      bool Focusable() const override final { return true; }
+      ftxui::Component ActiveChild() override final { return ui_; }
+
+      static ftxui::Component password(std::string* pass, std::function<void()> on_enter)
+      {
+        auto opt = ftxui::InputOption::Default();
+        opt.password = true;
+        opt.multiline = false;
+        opt.on_enter = std::move(on_enter);
+        return ftxui::Input(pass, std::move(opt));
+      }
+
+      void check()
+      {
+        if (wal_->getPassword() == password_)
+        {
+          const ftxui::Component overlay = *overlay_;
+          ftxui::ComponentBase* const parent = overlay->Parent();
+          overlay->Detach();
+          *overlay_ = std::make_shared<show_keys_>(wal_);
+          if (parent)
+            parent->Add(*overlay_);
+        }
+        else
+          error_ = "Invalid Password";
+      }
+
+    public:
+      explicit password_prompt_(std::shared_ptr<Monero::Wallet> wal, ftxui::Component* overlay)
+        : ftxui::ComponentBase(),
+          password_(),
+          error_(),
+          wal_(std::move(wal)),
+          overlay_(overlay),
+          title_(ftxui::text(_("Wallet (Secret) Keys - Password Required"))),
+          buttons_(
+            ftxui::Container::Horizontal({
+              ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
+              ftxui::Button(_("Show"), [this] () { this->check(); }, ascii())
+            })
+          ),
+          prompt_(password(std::addressof(password_), [this] { this->check(); })),
+          ui_(ftxui::Container::Vertical({buttons_, prompt_})),
+          display_(ftxui::text("Password: "))
+      {
+        Add(ui_);
+        prompt_->TakeFocus();
+        if (!wal_ || !overlay_)
+          throw std::invalid_argument{"Unexpected nullptr"};
+      }
+
+      bool OnEvent(ftxui::Event event) override final
+      {
+        if (!event.is_mouse())
+          error_.clear();
+        ui_->OnEvent(std::move(event));
+        return true;
+      }
+
+      ftxui::Element OnRender() override final
+      {
+        ftxui::Element separator;
+        if (error_.empty())
+          separator = ftxui::separator();
+        else
+          separator = ftxui::text(error_) | ftxui::inverted;
+
+        return ftxui::window(title_, ftxui::vbox({
+          ftxui::hcenter(buttons_->Render()),
+          separator,
+          ftxui::hbox({display_, prompt_->Render()})
+        }));
+      }
+    };
+
     class settings_ final : public ftxui::ComponentBase
     {
       const std::shared_ptr<Monero::Wallet> wal_;
@@ -259,7 +346,7 @@ namespace lwcli { namespace view
             if (error_.empty())
               throw event::close{};
           }, ascii()),
-          ftxui::Button(_("Secret Keys"), [this] () { show_keys(); }, ascii())
+          ftxui::Button(_("Secret Keys"), [this] () { password_prompt(); }, ascii())
         });
 
         ftxui::Components ui;
@@ -272,9 +359,9 @@ namespace lwcli { namespace view
         Add(ui_);
       }
 
-      void show_keys()
+      void password_prompt()
       {
-        overlay_ = std::make_shared<show_keys_>(wal_);
+        overlay_ = std::make_shared<password_prompt_>(wal_, std::addressof(overlay_));
         Add(overlay_);
       }
 
@@ -282,8 +369,9 @@ namespace lwcli { namespace view
       {
         try
         {
-          if (overlay_)
-            return overlay_->OnEvent(std::move(event));
+          const ftxui::Component overlay = overlay_; // can detach itself
+          if (overlay)
+            return overlay->OnEvent(std::move(event));
           else if (event == ftxui::Event::CtrlQ)
             throw event::close{};
           ui_->OnEvent(std::move(event));
