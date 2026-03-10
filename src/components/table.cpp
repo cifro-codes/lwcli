@@ -196,8 +196,6 @@ namespace lwcli { namespace component
             row.Decorate(ftxui::focus);
           }
         }
-        else
-          selected_ = -1;
 
         if (selected_ != highlighted_ && min_row() <= highlighted_ && highlighted_ < rows_)
         {
