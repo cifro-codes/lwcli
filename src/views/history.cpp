@@ -67,27 +67,11 @@ namespace lwcli { namespace view
       const ftxui::Component cancel_;
       ftxui::Component ok_;
       ftxui::Component container_;
-      ftxui::Element title_;
-      ftxui::Elements timestamp_;
-      ftxui::Elements payment_id_;
-      ftxui::Elements confirmation_;
-      ftxui::Elements amount_;
-      ftxui::Elements fee_;
-      ftxui::Elements block_height_;
-      ftxui::Elements minors_;
-      ftxui::Elements coinbase_;
-      bool failed_;
-      bool pending_;
-
-      void refresh()
-      {
-        on_refresh(history_->transaction(hash_));
-      }
 
       bool OnEvent(ftxui::Event event) override final
       {
         if (event == event::refresh_wallet)
-          refresh();
+          return on_refresh(history_->transaction(hash_));
         else if (event == ftxui::Event::CtrlQ)
           throw event::close{};
         return container_->OnEvent(std::move(event));
@@ -95,16 +79,52 @@ namespace lwcli { namespace view
 
       virtual ftxui::Element OnRender() override final
       {
+        ftxui::Element buttons = ftxui::hcenter(ftxui::hbox(cancel_->Render(), ok_->Render()));
+        if (!info_)
+        {
+          return ftxui::window(
+            ftxui::text(_("Tx ") + hash_),
+            ftxui::vbox(std::move(buttons), ftxui::separator(), ftxui::text("No longer available"))
+          );
+        }
+
+        ftxui::Elements minors;
+        {
+          std::string minors_text;
+          for (const std::uint32_t minor : info_->subaddrIndex())
+          {
+            if (!minors.empty())
+              minors_text.append(", ");
+            minors_text.append(std::to_string(minor));
+          }
+          minors = {ftxui::text(_("Subaddress Minor: ")), ftxui::text(std::move(minors_text))};
+        }
+
+        ftxui::Elements timestamp;
+        {
+          std::tm expanded{};
+          const std::time_t raw = info_->timestamp();
+          if (gmtime_r(std::addressof(raw), std::addressof(expanded)))
+          {
+            char buf[100] = {0};
+            if (sizeof(buf) <= std::strftime(buf, sizeof(buf), "%B %d %Y %I:%M:%S UTC", std::addressof(expanded)))
+              throw std::runtime_error{"strftime failed"};
+            timestamp = {ftxui::text(_("Timestamp: ")), ftxui::text(buf)};
+          }
+          else
+            timestamp = {ftxui::text(_("Timestamp: ")), ftxui::text("gmtime failure")};
+        }
+
         std::vector<ftxui::Elements> grid{
           {ftxui::text(_("Description: ")), note_input_->Render()},
-          timestamp_,
-          payment_id_,
-          confirmation_,
-          amount_,
-          fee_,
-          block_height_,
-          minors_,
-          coinbase_
+          std::move(timestamp),
+          {ftxui::text(_("Payment ID: ")), ftxui::text(info_->paymentId())},
+          {ftxui::text(_("Confirmations: ")), ftxui::text(std::to_string(info_->confirmations()))},
+          {ftxui::text(_("Amount: ")), ftxui::text(print_amount(*info_))},
+          {ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(info_->fee()))},
+          {ftxui::text(_("Block Height: ")), ftxui::text(std::to_string(info_->blockHeight()))},
+          std::move(minors),
+          {ftxui::text(_("Coinbase: ")), ftxui::text(info_->isCoinbase() ? _("Yes"): _("No"))},
         };
 
         const std::size_t base_size = grid.size();
@@ -124,98 +144,48 @@ namespace lwcli { namespace view
         ftxui::Elements vertical;
         vertical.reserve(4);
 
-        vertical.push_back(ftxui::hcenter(ftxui::hbox(cancel_->Render(), ok_->Render())));
-        if (failed_)
+        vertical.push_back(std::move(buttons));
+        if (info_->isFailed())
           vertical.push_back(ftxui::inverted(ftxui::hcenter(ftxui::text(_("FAILED")))));
-        else if (pending_)
+        else if (info_->isPending())
           vertical.push_back(ftxui::inverted(ftxui::hcenter(ftxui::text(_("PENDING")))));
         else
           vertical.push_back(ftxui::separator());
 
         vertical.push_back(ftxui::gridbox(std::move(grid)));
 
-        return ftxui::window(title_, ftxui::vbox(std::move(vertical)));
+        return ftxui::window(ftxui::text(_("Tx ") + hash_), ftxui::vbox(std::move(vertical)));
       }
 
-      void on_refresh(const Monero::TransactionInfo* info)
+      bool on_refresh(const Monero::TransactionInfo* info)
       {
-        if (!info)
-        {
-          note_ = "TX is no longer in history";
-          return;
-        }
-
-        payment_id_ = {ftxui::text(_("Payment ID: ")), ftxui::text(info->paymentId())};
-        amount_ = {ftxui::text(_("Amount: ")), ftxui::text(print_amount(*info))};
-        confirmation_ = {ftxui::text(_("Confirmations: ")), ftxui::text(std::to_string(info->confirmations()))};
-        block_height_ = {ftxui::text(_("Block Height: ")), ftxui::text(std::to_string(info->blockHeight()))};
-        {
-          std::string minors;
-          for (const std::uint32_t minor : info->subaddrIndex())
-          {
-            if (!minors.empty())
-              minors.append(", ");
-            minors.append(std::to_string(minor));
-          }
-          minors_ = {ftxui::text(_("Subaddress Minor: ")), ftxui::text(std::move(minors))};
-        }
-
-        {
-          std::tm expanded{};
-          const std::time_t timestamp = info->timestamp();
-          if (gmtime_r(std::addressof(timestamp), std::addressof(expanded)))
-          {
-            char buf[100] = {0};
-            if (sizeof(buf) <= std::strftime(buf, sizeof(buf), "%B %d %Y %I:%M:%S UTC", std::addressof(expanded)))
-              throw std::runtime_error{"strftime failed"};
-            timestamp_ = {ftxui::text(_("Timestamp: ")), ftxui::text(buf)};
-          }
-          else
-            timestamp_ = {ftxui::text(_("Timestamp: ")), ftxui::text("gmtime failure")};
-        }
-
         transfers_.clear();
+        info_ = info;
+        if (!info_)
+          return true;
+
         const auto& transfers = info->transfers();
         std::copy(transfers.begin(), transfers.end(), std::back_inserter(transfers_));
-        failed_ = info->isFailed();
-        pending_ = info->isPending();
+        return true;
       }
 
     public:
-      explicit tx_details(Monero::TransactionHistory* history, std::size_t index)
+      explicit tx_details(Monero::TransactionHistory* history, const Monero::TransactionInfo* info)
         : history_(history),
+          info_(nullptr),
           note_(),
           hash_(),
           transfers_(),
           note_input_(nullptr),
           cancel_(ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ftxui::ButtonOption::Ascii())),
           ok_(nullptr),
-          container_(),
-          title_(nullptr),
-          timestamp_(),
-          payment_id_(),
-          confirmation_(),
-          amount_(),
-          fee_(),
-          block_height_(),
-          minors_(),
-          coinbase_(),
-          failed_(false),
-          pending_(false)
+          container_()
       {
         if (!history_)
           throw std::runtime_error{"unexpected nullptr"};
 
-        const Monero::TransactionInfo* info = history->transaction(index);
-        if (!info)
-          throw std::runtime_error{"unexpected nullptr"};
-
-        hash_ = info->hash();
         on_refresh(info);
-
-        title_ = ftxui::text(_("Tx ") + info->hash());
-        fee_ = {ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(info->fee()))};
-        coinbase_ = {ftxui::text(_("Coinbase: ")), ftxui::text(info->isCoinbase() ? _("Yes"): _("No"))};
+        hash_ = info->hash();
 
         note_ = info->description();
         auto options = ftxui::InputOption::Default();
@@ -239,10 +209,9 @@ namespace lwcli { namespace view
       const std::shared_ptr<Monero::Wallet> wallet_;
       ftxui::Component table_;
       ftxui::Component overlay_;
-      ftxui::Element table_cached_; //!< Does not redraw when child is enabled
       const std::string title1_;
       const std::string title2_;
-      std::unordered_map<std::size_t, std::size_t> row_map_;
+      std::vector<const Monero::TransactionInfo*> row_map_;
       const std::uint32_t account_;
 
       bool Focusable() const override final { return true; }
@@ -265,7 +234,6 @@ namespace lwcli { namespace view
           wallet_(std::move(wallet)),
           table_(),
           overlay_(nullptr),
-          table_cached_(nullptr),
           title1_(_("Account #") + std::to_string(account) + " / "),
           title2_(" / " + wallet_->address(account, 0).substr(0, 20) + "..."),
           row_map_(),
@@ -305,6 +273,23 @@ namespace lwcli { namespace view
             if (!tx_history)
               throw std::runtime_error{"unexpeted history nullptr"};
             tx_history->refresh();
+
+            std::map<std::pair<std::uint64_t, std::string>, const Monero::TransactionInfo*, std::greater<>> ordered;
+            const auto history = tx_history->getAll();
+            for (const Monero::TransactionInfo* tx : history)
+            {
+              if (!tx)
+                throw std::runtime_error{"unexpected tx_info nullptr"};
+
+              if (tx->subaddrAccount() == account_)
+                ordered.try_emplace({tx->blockHeight(), tx->hash()}, tx);
+            }
+
+            row_map_.clear();
+            row_map_.reserve(ordered.size());
+            for (const auto& entry : ordered)
+              row_map_.push_back(entry.second);
+
             if (overlay_)
               overlay_->OnEvent(std::move(event));
             return true;
@@ -333,32 +318,11 @@ namespace lwcli { namespace view
 
       std::vector<std::vector<std::string>> transaction_list()
       {
-        Monero::TransactionHistory* tx_history = wallet_->history();
-        if (!tx_history)
-          throw std::runtime_error{"unexpected history nullptr"};
-
-        std::map<std::pair<std::uint64_t, std::string>, std::pair<const Monero::TransactionInfo*, std::size_t>, std::greater<>> ordered;
-        const auto history = tx_history->getAll();
-        for (std::size_t i = 0; i < history.size(); ++i)
-        {
-          const Monero::TransactionInfo* tx = history[i];
-          if (!tx)
-            throw std::runtime_error{"unexpected tx_info nullptr"};
-
-          if (tx->subaddrAccount() == account_)
-            ordered.try_emplace({tx->blockHeight(), tx->hash()}, tx, i);
-        }
-
         std::vector<std::vector<std::string>> rows;
-        rows.reserve(ordered.size() + 2);
+        rows.reserve(row_map_.size() + 2);
 
-        std::size_t i = 0;
-        row_map_.clear();
-        for (const auto& entry : ordered)
+        for (const Monero::TransactionInfo* tx : row_map_)
         {
-          const Monero::TransactionInfo* tx = entry.second.first;
-          row_map_.emplace(i, entry.second.second);
-         
           const std::uint64_t amount = tx->amount();
           const int direction = tx->direction();
           const std::uint64_t fee = tx->fee();
@@ -403,8 +367,6 @@ namespace lwcli { namespace view
             lwsf::displayAmount(tx->fee()),
             tx->hash().substr(0, 16) + "..."
           });
-
-          ++i;
         }
 
         return rows;
@@ -412,19 +374,14 @@ namespace lwcli { namespace view
 
       ftxui::Element OnRender() override final
       {
-        /* Do not redraw table when showing tx. the 
-        history()->refresh() call can invalidate pointers */
+        auto table = ftxui::vbox({
+          get_title(),
+          ftxui::text(_("Balance: ") + lwsf::displayAmount(wallet_->balance(account_))),
+          table_->Render() | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center | ftxui::flex
+        });
         if (!overlay_)
-        {
-          auto table = table_->Render(); // compute balance first in callback 
-          table_cached_ = ftxui::vbox({
-            get_title(),
-            ftxui::text(_("Balance: ") + lwsf::displayAmount(wallet_->balance(account_))),
-            std::move(table) | ftxui::vscroll_indicator | ftxui::yframe | ftxui::center | ftxui::flex
-          }); 
-          return table_cached_;
-        }
-        return ftxui::dbox(table_cached_, decorate::overlay(overlay_->Render()));
+          return table;
+        return ftxui::dbox(std::move(table), decorate::overlay(overlay_->Render()));
       }
     };
   } // anonymous
