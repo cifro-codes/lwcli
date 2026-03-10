@@ -148,7 +148,6 @@ namespace lwcli { namespace view
         payment_id_ = {ftxui::text(_("Payment ID: ")), ftxui::text(info->paymentId())};
         amount_ = {ftxui::text(_("Amount: ")), ftxui::text(print_amount(*info))};
         confirmation_ = {ftxui::text(_("Confirmations: ")), ftxui::text(std::to_string(info->confirmations()))};
-        fee_ = {ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(info->fee()))};
         block_height_ = {ftxui::text(_("Block Height: ")), ftxui::text(std::to_string(info->blockHeight()))};
         {
           std::string minors;
@@ -215,6 +214,7 @@ namespace lwcli { namespace view
         on_refresh(info);
 
         title_ = ftxui::text(_("Tx ") + info->hash());
+        fee_ = {ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(info->fee()))};
         coinbase_ = {ftxui::text(_("Coinbase: ")), ftxui::text(info->isCoinbase() ? _("Yes"): _("No"))};
 
         note_ = info->description();
