@@ -152,7 +152,7 @@ namespace lwcli { namespace view
           const bool has_overlay = bool(state_.overlay);
 
           if (event == event::refresh_wallet)
-            return true;
+            return history_->OnEvent(std::move(event));
           else if (state_.overlay)
             state_.overlay->OnEvent(std::move(event));
           else if (event == ftxui::Event::CtrlQ)

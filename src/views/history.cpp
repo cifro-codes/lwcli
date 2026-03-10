@@ -26,6 +26,7 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <cstring>
 #include <ctime>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
@@ -60,6 +61,8 @@ namespace lwcli { namespace view
       Monero::TransactionHistory* const history_;
       Monero::TransactionInfo const* info_;
       std::string note_;
+      std::string hash_;
+      std::vector<Monero::TransactionInfo::Transfer> transfers_;
       ftxui::Component note_input_;
       const ftxui::Component cancel_;
       ftxui::Component ok_;
@@ -67,14 +70,25 @@ namespace lwcli { namespace view
       ftxui::Element title_;
       ftxui::Elements timestamp_;
       ftxui::Elements payment_id_;
+      ftxui::Elements confirmation_;
       ftxui::Elements amount_;
       ftxui::Elements fee_;
+      ftxui::Elements block_height_;
       ftxui::Elements minors_;
       ftxui::Elements coinbase_;
+      bool failed_;
+      bool pending_;
+
+      void refresh()
+      {
+        on_refresh(history_->transaction(hash_));
+      }
 
       bool OnEvent(ftxui::Event event) override final
       {
-        if (event == ftxui::Event::CtrlQ)
+        if (event == event::refresh_wallet)
+          refresh();
+        else if (event == ftxui::Event::CtrlQ)
           throw event::close{};
         return container_->OnEvent(std::move(event));
       }
@@ -85,16 +99,16 @@ namespace lwcli { namespace view
           {ftxui::text(_("Description: ")), note_input_->Render()},
           timestamp_,
           payment_id_,
-          {ftxui::text(_("Confirmations: ")), ftxui::text(std::to_string(info_->confirmations()))},
+          confirmation_,
           amount_,
           fee_,
-          {ftxui::text(_("Block Height: ")), ftxui::text(std::to_string(info_->blockHeight()))},
+          block_height_,
           minors_,
           coinbase_
         };
 
         const std::size_t base_size = grid.size();
-        for (const auto& transfer : info_->transfers())
+        for (const auto& transfer : transfers_)
         {
           const std::string address = transfer.address.empty() ? 
             std::string{_(" to Unknown Address")} : _(" to ")  + transfer.address;
@@ -111,9 +125,9 @@ namespace lwcli { namespace view
         vertical.reserve(4);
 
         vertical.push_back(ftxui::hcenter(ftxui::hbox(cancel_->Render(), ok_->Render())));
-        if (info_->isFailed())
+        if (failed_)
           vertical.push_back(ftxui::inverted(ftxui::hcenter(ftxui::text(_("FAILED")))));
-        else if (info_->isPending())
+        else if (pending_)
           vertical.push_back(ftxui::inverted(ftxui::hcenter(ftxui::text(_("PENDING")))));
         else
           vertical.push_back(ftxui::separator());
@@ -123,48 +137,22 @@ namespace lwcli { namespace view
         return ftxui::window(title_, ftxui::vbox(std::move(vertical)));
       }
 
-    public:
-      explicit tx_details(Monero::TransactionHistory* history, std::size_t index)
-        : history_(history),
-          info_(nullptr),
-          note_(),
-          note_input_(nullptr),
-          cancel_(ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ftxui::ButtonOption::Ascii())),
-          ok_(nullptr),
-          container_(),
-          title_(nullptr),
-          timestamp_(),
-          payment_id_(),
-          amount_(),
-          fee_(),
-          minors_(),
-          coinbase_()
+      void on_refresh(const Monero::TransactionInfo* info)
       {
-        if (!history_)
-          throw std::runtime_error{"unexpected nullptr"};
-
-        info_ = history->transaction(index);
-        if (!info_)
-          throw std::runtime_error{"unexpected nullptr"};
- 
-        title_ = ftxui::text(_("Tx ") + info_->hash());
+        if (!info)
         {
-          std::tm expanded{};
-          const std::time_t timestamp = info_->timestamp();
-          if (!gmtime_r(std::addressof(timestamp), std::addressof(expanded)))
-            throw std::runtime_error{"gmtime failure"};
-
-          char buf[100] = {0};
-          if (sizeof(buf) <= std::strftime(buf, sizeof(buf), "%B %d %Y %I:%M:%S UTC", std::addressof(expanded)))
-            throw std::runtime_error{"strftime failed"};
-          timestamp_ = {ftxui::text(_("Timestamp: ")), ftxui::text(buf)};
+          note_ = "TX is no longer in history";
+          return;
         }
-        payment_id_ = {ftxui::text(_("Payment ID: ")), ftxui::text(info_->paymentId())};
-        amount_ = {ftxui::text(_("Amount: ")), ftxui::text(print_amount(*info_))};
-        fee_ = {ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(info_->fee()))};
+
+        payment_id_ = {ftxui::text(_("Payment ID: ")), ftxui::text(info->paymentId())};
+        amount_ = {ftxui::text(_("Amount: ")), ftxui::text(print_amount(*info))};
+        confirmation_ = {ftxui::text(_("Confirmations: ")), ftxui::text(std::to_string(info->confirmations()))};
+        fee_ = {ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(info->fee()))};
+        block_height_ = {ftxui::text(_("Block Height: ")), ftxui::text(std::to_string(info->blockHeight()))};
         {
           std::string minors;
-          for (const std::uint32_t minor : info_->subaddrIndex())
+          for (const std::uint32_t minor : info->subaddrIndex())
           {
             if (!minors.empty())
               minors.append(", ");
@@ -172,15 +160,70 @@ namespace lwcli { namespace view
           }
           minors_ = {ftxui::text(_("Subaddress Minor: ")), ftxui::text(std::move(minors))};
         }
-        coinbase_ = {ftxui::text(_("Coinbase: ")), ftxui::text(info_->isCoinbase() ? _("Yes"): _("No"))};
 
-        note_ = info_->description();
+        {
+          std::tm expanded{};
+          const std::time_t timestamp = info->timestamp();
+          if (gmtime_r(std::addressof(timestamp), std::addressof(expanded)))
+          {
+            char buf[100] = {0};
+            if (sizeof(buf) <= std::strftime(buf, sizeof(buf), "%B %d %Y %I:%M:%S UTC", std::addressof(expanded)))
+              throw std::runtime_error{"strftime failed"};
+            timestamp_ = {ftxui::text(_("Timestamp: ")), ftxui::text(buf)};
+          }
+          else
+            timestamp_ = {ftxui::text(_("Timestamp: ")), ftxui::text("gmtime failure")};
+        }
+
+        transfers_.clear();
+        const auto& transfers = info->transfers();
+        std::copy(transfers.begin(), transfers.end(), std::back_inserter(transfers_));
+        failed_ = info->isFailed();
+        pending_ = info->isPending();
+      }
+
+    public:
+      explicit tx_details(Monero::TransactionHistory* history, std::size_t index)
+        : history_(history),
+          note_(),
+          hash_(),
+          transfers_(),
+          note_input_(nullptr),
+          cancel_(ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ftxui::ButtonOption::Ascii())),
+          ok_(nullptr),
+          container_(),
+          title_(nullptr),
+          timestamp_(),
+          payment_id_(),
+          confirmation_(),
+          amount_(),
+          fee_(),
+          block_height_(),
+          minors_(),
+          coinbase_(),
+          failed_(false),
+          pending_(false)
+      {
+        if (!history_)
+          throw std::runtime_error{"unexpected nullptr"};
+
+        const Monero::TransactionInfo* info = history->transaction(index);
+        if (!info)
+          throw std::runtime_error{"unexpected nullptr"};
+
+        hash_ = info->hash();
+        on_refresh(info);
+
+        title_ = ftxui::text(_("Tx ") + info->hash());
+        coinbase_ = {ftxui::text(_("Coinbase: ")), ftxui::text(info->isCoinbase() ? _("Yes"): _("No"))};
+
+        note_ = info->description();
         auto options = ftxui::InputOption::Default();
         options.cursor_position = note_.size();
         note_input_ = ftxui::Input(&note_, std::move(options));
 
         ok_ = ftxui::Button(_("OK"), [this] () {
-          history_->setTxNote(info_->hash(), note_);
+          history_->setTxNote(hash_, note_);
           throw event::close{};
         }, ftxui::ButtonOption::Ascii());
 
@@ -256,7 +299,17 @@ namespace lwcli { namespace view
       {
         try
         {
-          if (overlay_)
+          if (event == event::refresh_wallet)
+          {
+            Monero::TransactionHistory* tx_history = wallet_->history();
+            if (!tx_history)
+              throw std::runtime_error{"unexpeted history nullptr"};
+            tx_history->refresh();
+            if (overlay_)
+              overlay_->OnEvent(std::move(event));
+            return true;
+          }
+          else if (overlay_)
           {
             overlay_->OnEvent(std::move(event));
             return true;
@@ -285,7 +338,6 @@ namespace lwcli { namespace view
           throw std::runtime_error{"unexpected history nullptr"};
 
         std::map<std::pair<std::uint64_t, std::string>, std::pair<const Monero::TransactionInfo*, std::size_t>, std::greater<>> ordered;
-        tx_history->refresh();
         const auto history = tx_history->getAll();
         for (std::size_t i = 0; i < history.size(); ++i)
         {
@@ -311,14 +363,19 @@ namespace lwcli { namespace view
           const int direction = tx->direction();
           const std::uint64_t fee = tx->fee();
  
+          char date[12] = {0};
           std::tm expanded{};
           const std::time_t timestamp = tx->timestamp();
-          if (!gmtime_r(std::addressof(timestamp), std::addressof(expanded)))
-            throw std::runtime_error{"gmtime failure"};
-
-          char date[12] = {0};
-          if (sizeof(date) - 1 != std::strftime(date, sizeof(date), "%Y/%m/%d ", std::addressof(expanded)))
-            throw std::runtime_error{"strftime failed"};
+          if (gmtime_r(std::addressof(timestamp), std::addressof(expanded)))
+          {
+            if (sizeof(date) - 1 != std::strftime(date, sizeof(date), "%Y/%m/%d ", std::addressof(expanded)))
+              throw std::runtime_error{"strftime failed"};
+          }
+          else
+          {
+            std::strncpy(date, "gmtime fail", sizeof(date));
+            date[sizeof(date) - 1] = 0;
+          }
 
           std::string payment_id = tx->paymentId();
           if (payment_id.size() == 16 && payment_id.find_first_not_of('0') == std::string::npos)
