@@ -228,6 +228,30 @@ namespace lwcli { namespace view
         return ftxui::text(title1_ + wallet_->getSubaddressLabel(account_, 0) + title2_);
       }
 
+      void load_history()
+      {
+        Monero::TransactionHistory* tx_history = wallet_->history();
+        if (!tx_history)
+          throw std::runtime_error{"unexpeted history nullptr"};
+        tx_history->refresh();
+
+        std::map<std::pair<std::uint64_t, std::string>, const Monero::TransactionInfo*, std::greater<>> ordered;
+        const auto history = tx_history->getAll();
+        for (const Monero::TransactionInfo* tx : history)
+        {
+          if (!tx)
+            throw std::runtime_error{"unexpected tx_info nullptr"};
+
+          if (tx->subaddrAccount() == account_)
+            ordered.try_emplace({tx->blockHeight(), tx->hash()}, tx);
+        }
+
+        row_map_.clear();
+        row_map_.reserve(ordered.size());
+        for (const auto& entry : ordered)
+          row_map_.push_back(entry.second);
+      }
+
     public:
       explicit history_(std::shared_ptr<Monero::Wallet>&& wallet, std::uint32_t account)
         : ftxui::ComponentBase(),
@@ -242,6 +266,8 @@ namespace lwcli { namespace view
         if (!wallet_)
           throw std::invalid_argument{"lwcli::view::history given nullptr"};
  
+        load_history();
+
         // perform transalation lookup once
         table_ = component::table(
           {_("Date"), _("Amount"), _("Payment ID"), _("Label"), _("Desription"), _("Block"), _("Fee"), _("Hash")},
@@ -269,27 +295,7 @@ namespace lwcli { namespace view
         {
           if (event == event::refresh_wallet)
           {
-            Monero::TransactionHistory* tx_history = wallet_->history();
-            if (!tx_history)
-              throw std::runtime_error{"unexpeted history nullptr"};
-            tx_history->refresh();
-
-            std::map<std::pair<std::uint64_t, std::string>, const Monero::TransactionInfo*, std::greater<>> ordered;
-            const auto history = tx_history->getAll();
-            for (const Monero::TransactionInfo* tx : history)
-            {
-              if (!tx)
-                throw std::runtime_error{"unexpected tx_info nullptr"};
-
-              if (tx->subaddrAccount() == account_)
-                ordered.try_emplace({tx->blockHeight(), tx->hash()}, tx);
-            }
-
-            row_map_.clear();
-            row_map_.reserve(ordered.size());
-            for (const auto& entry : ordered)
-              row_map_.push_back(entry.second);
-
+            load_history();
             if (overlay_)
               overlay_->OnEvent(std::move(event));
             return true;
