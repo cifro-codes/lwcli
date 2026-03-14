@@ -83,7 +83,7 @@ namespace lwcli { namespace view
       ftxui::Component ActiveChild() override final
       {
         if (state_.overlay)
-          return state_.overlay; 
+          return state_.overlay;
         return ui_;
       }
 

@@ -26,6 +26,7 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -289,7 +290,8 @@ int main(int, const char* argv[])
 
     auto window = ftxui::CatchEvent(lwcli::view::manager(std::move(wm), std::move(prog.file)), [&] (ftxui::Event event)
     {
-      state.last_event = std::chrono::steady_clock::now().time_since_epoch().count();
+      if (event != lwcli::event::refresh_wallet)
+        state.last_event = std::chrono::steady_clock::now().time_since_epoch().count();
       if (event == ftxui::Event::CtrlC)
       {
         state.screen.ExitLoopClosure()();

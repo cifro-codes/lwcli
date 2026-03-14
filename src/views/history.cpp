@@ -64,9 +64,11 @@ namespace lwcli { namespace view
       std::string hash_;
       std::vector<Monero::TransactionInfo::Transfer> transfers_;
       ftxui::Component note_input_;
-      const ftxui::Component cancel_;
-      ftxui::Component ok_;
+      ftxui::Component buttons_;
       ftxui::Component container_;
+
+      bool Focusable() const override final { return true; }
+      ftxui::Component ActiveChild() override final { return container_; }
 
       bool OnEvent(ftxui::Event event) override final
       {
@@ -79,7 +81,7 @@ namespace lwcli { namespace view
 
       virtual ftxui::Element OnRender() override final
       {
-        ftxui::Element buttons = ftxui::hcenter(ftxui::hbox(cancel_->Render(), ok_->Render()));
+        auto buttons = ftxui::hcenter(buttons_->Render());
         if (!info_)
         {
           return ftxui::window(
@@ -128,7 +130,7 @@ namespace lwcli { namespace view
         };
 
         const std::size_t base_size = grid.size();
-        for (const auto& transfer : transfers_)
+        for (const auto& transfer : info_->transfers())
         {
           const std::string address = transfer.address.empty() ? 
             std::string{_(" to Unknown Address")} : _(" to ")  + transfer.address;
@@ -159,13 +161,7 @@ namespace lwcli { namespace view
 
       bool on_refresh(const Monero::TransactionInfo* info)
       {
-        transfers_.clear();
         info_ = info;
-        if (!info_)
-          return true;
-
-        const auto& transfers = info->transfers();
-        std::copy(transfers.begin(), transfers.end(), std::back_inserter(transfers_));
         return true;
       }
 
@@ -177,8 +173,7 @@ namespace lwcli { namespace view
           hash_(),
           transfers_(),
           note_input_(nullptr),
-          cancel_(ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ftxui::ButtonOption::Ascii())),
-          ok_(nullptr),
+          buttons_(),
           container_()
       {
         if (!history_)
@@ -190,17 +185,19 @@ namespace lwcli { namespace view
         note_ = info->description();
         auto options = ftxui::InputOption::Default();
         options.cursor_position = note_.size();
+        options.multiline = false;
         note_input_ = ftxui::Input(&note_, std::move(options));
 
-        ok_ = ftxui::Button(_("OK"), [this] () {
-          history_->setTxNote(hash_, note_);
-          throw event::close{};
-        }, ftxui::ButtonOption::Ascii());
-
-        container_ = ftxui::Container::Vertical({
-          ftxui::Container::Horizontal({cancel_, ok_}),
-          note_input_
+        buttons_ = ftxui::Container::Horizontal({
+          ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ftxui::ButtonOption::Ascii()),
+          ftxui::Button(_("OK"), [this] () {
+            history_->setTxNote(hash_, note_);
+            throw event::close{};
+          }, ftxui::ButtonOption::Ascii())
         });
+
+        container_ = ftxui::Container::Vertical({buttons_, note_input_});
+        Add(container_);
       }
     };
 
