@@ -7,10 +7,15 @@ This was _not_ billed/paid for by Monero CCS, as I'm not sure if there are real 
 ## Building
 ```bash
 git clone https://github.com/monero-project/monero.git
+
+# For when you work with existing Monero sources:
+GIT_DIR=monero/.git git pull
+GIT_DIR=monero/.git git submodule update --init --recursive
+
 git clone https://github.com/cifro-codes/lwcli.git
 cd lwcli && mkdir build && cd build
-git submodules update --init --recursive
-cmake -DCMAKE_BUILD_TYPE=Release -DMONERO_SOURCE_DIR=../../monero ..
+git submodule update --init --recursive
+cmake -DCMAKE_BUILD_TYPE=Release -DMONERO_SOURCE_DIR=$(realpath ../../monero) -DFETCHCONTENT_SOURCE_DIR_MONERO=../../monero  ..
 make -j$(nproc)
 ./src/lwcli -h
 ```
