@@ -200,13 +200,15 @@ namespace lwcli { namespace view
       explicit show_keys_(const std::shared_ptr<Monero::Wallet>& wal)
         : ftxui::ComponentBase(),
           title_(ftxui::text(_("Wallet (Secret) Keys"))),
-          buttons_(ftxui::Button(_("Close"), [] () { throw event::close{}; }, ascii())),
+          buttons_(ftxui::Button(_("Close"), [] () { event::send(event::close()); }, ascii())),
           display_(get_keys(wal))
       {}
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        buttons_->OnEvent(std::move(event));
+        if (evt == event::close())
+          return false;
+        buttons_->OnEvent(std::move(evt));
         return true;
       }
 
@@ -220,12 +222,27 @@ namespace lwcli { namespace view
       }
     };
 
+    struct password_state
+    {
+      const std::shared_ptr<Monero::Wallet> wallet;
+      std::weak_ptr<ftxui::ComponentBase> overlay;
+      std::string password;
+      std::string error;
+
+      explicit password_state(std::shared_ptr<Monero::Wallet> in)
+        : wallet(std::move(in)),
+          overlay(),
+          password(),
+          error()
+      {
+        if (!wallet)
+          throw std::logic_error{"unexpected nullptr wallet"};
+      }
+    };
+
     class password_prompt_ final : public ftxui::ComponentBase
     {
-      std::string password_;
-      std::string error_;
-      std::shared_ptr<Monero::Wallet> wal_;
-      ftxui::Component* overlay_;
+      const std::shared_ptr<password_state> state_;
       const ftxui::Element title_;
       const ftxui::Component buttons_;
       const ftxui::Component prompt_;
@@ -235,69 +252,73 @@ namespace lwcli { namespace view
       bool Focusable() const override final { return true; }
       ftxui::Component ActiveChild() override final { return ui_; }
 
-      static ftxui::Component password(std::string* pass, std::function<void()> on_enter)
+      static ftxui::Component password(const std::shared_ptr<password_state>& state, std::function<void()> on_enter)
       {
+        if (!state)
+          throw std::logic_error{"unexpected nullptr state"};
+
         auto opt = ftxui::InputOption::Default();
         opt.password = true;
         opt.multiline = false;
         opt.on_enter = std::move(on_enter);
-        return ftxui::Input(pass, std::move(opt));
+        return ftxui::Input(std::addressof(state->password), std::move(opt));
       }
 
-      void check()
+      static void check(const std::shared_ptr<password_state> state)
       {
-        if (wal_->getPassword() == password_)
+        if (!state)
+          return;
+
+        ftxui::Component overlay{nullptr};
+        if (state->wallet->getPassword() == state->password && (overlay = state->overlay.lock()))
         {
-          const ftxui::Component overlay = *overlay_;
           ftxui::ComponentBase* const parent = overlay->Parent();
           overlay->Detach();
-          *overlay_ = std::make_shared<show_keys_>(wal_);
+          overlay = std::make_shared<show_keys_>(state->wallet);
+          state->overlay = overlay;
           if (parent)
-            parent->Add(*overlay_);
+            parent->Add(std::move(overlay));
         }
         else
-          error_ = "Invalid Password";
+          state->error = _("Invalid Password");
       }
 
     public:
-      explicit password_prompt_(std::shared_ptr<Monero::Wallet> wal, ftxui::Component* overlay)
+      explicit password_prompt_(std::weak_ptr<password_state> state)
         : ftxui::ComponentBase(),
-          password_(),
-          error_(),
-          wal_(std::move(wal)),
-          overlay_(overlay),
+          state_(state.lock()),
           title_(ftxui::text(_("Wallet (Secret) Keys - Password Required"))),
           buttons_(
             ftxui::Container::Horizontal({
-              ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
-              ftxui::Button(_("Show"), [this] () { this->check(); }, ascii())
+              ftxui::Button(_("Cancel"), [] () { event::send(event::close()); }, ascii()),
+              ftxui::Button(_("Show"), [state] () { check(state.lock()); }, ascii())
             })
           ),
-          prompt_(password(std::addressof(password_), [this] { this->check(); })),
+          prompt_(password(state_, [state] { check(state.lock()); })),
           ui_(ftxui::Container::Vertical({buttons_, prompt_})),
-          display_(ftxui::text("Password: "))
+          display_(ftxui::text(_("Password: ")))
       {
         Add(ui_);
         prompt_->TakeFocus();
-        if (!wal_ || !overlay_)
-          throw std::invalid_argument{"Unexpected nullptr"};
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        if (!event.is_mouse())
-          error_.clear();
-        ui_->OnEvent(std::move(event));
+        if (!evt.is_mouse())
+          state_->error.clear();
+        if (evt == event::close())
+          return false;
+        ui_->OnEvent(std::move(evt));
         return true;
       }
 
       ftxui::Element OnRender() override final
       {
         ftxui::Element separator;
-        if (error_.empty())
+        if (state_->error.empty())
           separator = ftxui::separator();
         else
-          separator = ftxui::text(error_) | ftxui::inverted;
+          separator = ftxui::text(state_->error) | ftxui::inverted;
 
         return ftxui::window(title_, ftxui::vbox({
           ftxui::hcenter(buttons_->Render()),
@@ -315,14 +336,14 @@ namespace lwcli { namespace view
       std::string error_;
       ftxui::Component buttons_;
       ftxui::Component ui_;
-      ftxui::Component overlay_;
+      std::shared_ptr<password_state> state_;
       ftxui::Element cached_;
 
       bool Focusable() const override final { return true; }
       ftxui::Component ActiveChild() override final
       {
-        if (overlay_)
-          return overlay_;
+        if (state_)
+          return state_->overlay.lock();
         return ui_;
       }
 
@@ -335,63 +356,77 @@ namespace lwcli { namespace view
           error_(),
           buttons_(),
           ui_(),
-          overlay_(),
+          state_(),
           cached_()
+      {}
+
+      static void set_ui(const std::shared_ptr<settings_> self)
       {
-        buttons_ = ftxui::Container::Horizontal({
-          ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
-          ftxui::Button(_("Save"), [this] () {
-            error_.clear();
-            config_->store(*wal_, error_);
-            if (error_.empty())
-              throw event::close{};
+        if (!self)
+          throw std::logic_error{"unexpected settings_ nullptr"};
+
+        const std::weak_ptr<settings_> weak{self};
+        self->buttons_ = ftxui::Container::Horizontal({
+          ftxui::Button(_("Cancel"), [] () { event::send(event::close()); }, ascii()),
+          ftxui::Button(_("Save"), [weak] () {
+            if (auto self = weak.lock(); self)
+            {
+              self->error_.clear();
+              self->config_->store(*self->wal_, self->error_);
+              if (self->error_.empty())
+                event::send(event::close());
+            }
           }, ascii()),
-          ftxui::Button(_("Secret Keys"), [this] () { password_prompt(); }, ascii())
+          ftxui::Button(_("Secret Keys"), [weak] () { password_prompt(weak.lock()); }, ascii())
         });
 
         ftxui::Components ui;
-        ui.reserve(config_->states.size() + 1);
-        ui.push_back(buttons_);
-        for (const auto& opt : config_->states)
+        ui.reserve(self->config_->states.size() + 1);
+        ui.push_back(self->buttons_);
+        for (const auto& opt : self->config_->states)
           ui.push_back(opt.ui);
 
-        ui_ = ftxui::Container::Vertical(std::move(ui));
-        Add(ui_);
+        self->ui_ = ftxui::Container::Vertical(std::move(ui));
+        self->Add(self->ui_);
       }
 
-      void password_prompt()
+      static void password_prompt(const std::shared_ptr<settings_> self)
       {
-        overlay_ = std::make_shared<password_prompt_>(wal_, std::addressof(overlay_));
-        Add(overlay_);
+        if (self)
+        {
+          auto state = std::make_shared<password_state>(self->wal_);
+          auto overlay = std::make_shared<password_prompt_>(state);
+          state->overlay = overlay;
+          self->Add(std::move(overlay));
+          self->state_ = std::move(state);
+        }
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        try
+        if (state_)
         {
-          const ftxui::Component overlay = overlay_; // can detach itself
-          if (overlay)
-            return overlay->OnEvent(std::move(event));
-          else if (event == ftxui::Event::CtrlQ)
-            throw event::close{};
-          ui_->OnEvent(std::move(event));
+          const auto overlay = state_->overlay.lock();
+          if (overlay && !overlay->OnEvent(evt) && evt == event::close())
+          {
+            overlay->Detach();
+            state_->overlay.reset();
+            state_.reset();
+          }
+          else if (evt == event::close())
+            state_.reset();
         }
-        catch (const event::close&)
-        {
-          if (!overlay_)
-            throw;
-          overlay_->Detach();
-          overlay_.reset();
-        }
+        else if (evt == event::close())
+          return false;
+        ui_->OnEvent(std::move(evt));
         return true;
       }
 
       ftxui::Element OnRender() override final
       {
-        if (overlay_)
-        {
-          return ftxui::dbox({cached_, decorate::overlay(overlay_->Render())});
-        }
+        ftxui::Component overlay;
+        if (state_ && (overlay = state_->overlay.lock()))
+          return ftxui::dbox({cached_, decorate::overlay(overlay->Render())});
 
         const auto min_size = ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 5);
         std::vector<ftxui::Elements> grid;
@@ -419,7 +454,9 @@ namespace lwcli { namespace view
   {
     if (!wal)
       throw std::invalid_argument{"view::settings cannot be given nullptr"};
-    return std::make_shared<settings_>(std::move(wal));
+    auto self = std::make_shared<settings_>(std::move(wal));
+    settings_::set_ui(self);
+    return self;
   }
 
 }} // lwcli // 

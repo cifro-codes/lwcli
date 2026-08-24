@@ -28,6 +28,8 @@
 
 #include "events.h"
 
+#include <ftxui/component/screen_interactive.hpp>
+
 namespace lwcli { namespace event
 {
   /* Keep under 15 characters so that libstdc++ and libc++ can use small
@@ -35,4 +37,12 @@ namespace lwcli { namespace event
   const ftxui::Event lock_wallet = ftxui::Event::Special("lwcli.lockw");
   const ftxui::Event refresh_wallet = ftxui::Event::Special("lwcli.refresh");
   const ftxui::Event send_async = ftxui::Event::Special("lwcli.sendasync");
+
+  bool send(ftxui::Event evt)
+  {
+    ftxui::ScreenInteractive* const active = ftxui::ScreenInteractive::Active();
+    if (active)
+      active->PostEvent(std::move(evt));
+    return bool(active);
+  }
 }}

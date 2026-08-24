@@ -62,7 +62,7 @@ namespace lwcli { namespace view
     {
       const std::shared_ptr<Monero::Wallet> wal = state->wal;
       return ftxui::Container::Horizontal({
-        ftxui::Button("[c]lose", [] () { throw event::close{}; }, ascii()),
+        ftxui::Button("[c]lose", [] () { event::send(event::close()); }, ascii()),
         ftxui::Button("[s]end", [state] () { state->overlay = send(state->wm, state->wal, state->selected_account); }, ascii()),
         ftxui::Button("[a]ccounts", [state] () { state->overlay = accounts(state->wal, &state->selected_account); }, ascii()),
         ftxui::Button("[r]efresh", [wal] () { wal->refreshAsync(); }, ascii()),
@@ -104,9 +104,7 @@ namespace lwcli { namespace view
 
       void refreshed() override final
       {
-        ftxui::ScreenInteractive* const active = ftxui::ScreenInteractive::Active();
-        if (active)
-          active->PostEvent(event::refresh_wallet);
+        event::send(event::refresh_wallet);
       }
 
     public:
@@ -145,45 +143,43 @@ namespace lwcli { namespace view
         active_account_ = state_.selected_account;
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        try
-        {
-          const bool has_overlay = bool(state_.overlay);
+        const bool has_overlay = bool(state_.overlay);
 
-          if (event == event::refresh_wallet)
-            return history_->OnEvent(std::move(event));
-          else if (state_.overlay)
-            state_.overlay->OnEvent(std::move(event));
-          else if (event == ftxui::Event::CtrlQ)
-            return history_->OnEvent(std::move(event));
-          else if (!ui_->OnEvent(event))
+        if (evt == event::refresh_wallet)
+          return history_->OnEvent(std::move(evt));
+        else if (state_.overlay)
+        {
+          if (!state_.overlay->OnEvent(evt) && evt == event::close())
           {
-            if (event == ftxui::Event::c || event == ftxui::Event::C)
-              throw event::close{};
-            else if (event == ftxui::Event::s || event == ftxui::Event::S)
-              state_.overlay = send(state_.wm, state_.wal, state_.selected_account);
-            else if (event == ftxui::Event::a || event == ftxui::Event::a)
-              state_.overlay = accounts(state_.wal, &state_.selected_account);
-            else if (event == ftxui::Event::r || event == ftxui::Event::R)
-              state_.wal->refreshAsync();
-            else if (event == ftxui::Event::e || event == ftxui::Event::E)
-              state_.overlay = settings(state_.wal);
+            state_.overlay->Detach();
+            state_.overlay.reset();
           }
-
-          if (!has_overlay && state_.overlay)
-            Add(state_.overlay);
-
-          update_account();
         }
-        catch (const event::close&)
+        else if (evt == event::close())
+          return history_->OnEvent(std::move(evt));
+        else if (!ui_->OnEvent(evt))
         {
-          if (!state_.overlay)
-            throw;
-          state_.overlay->Detach();
-          state_.overlay.reset();
+          if (evt == ftxui::Event::c || evt == ftxui::Event::C)
+          {
+            event::send(event::close());
+            return true;
+          }
+          else if (evt == ftxui::Event::s || evt == ftxui::Event::S)
+            state_.overlay = send(state_.wm, state_.wal, state_.selected_account);
+          else if (evt == ftxui::Event::a || evt == ftxui::Event::a)
+            state_.overlay = accounts(state_.wal, &state_.selected_account);
+          else if (evt == ftxui::Event::r || evt == ftxui::Event::R)
+            state_.wal->refreshAsync();
+          else if (evt == ftxui::Event::e || evt == ftxui::Event::E)
+            state_.overlay = settings(state_.wal);
         }
 
+        if (!has_overlay && state_.overlay)
+          Add(state_.overlay);
+
+        update_account();
         return true;
       }
 

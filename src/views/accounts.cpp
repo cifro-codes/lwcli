@@ -117,24 +117,32 @@ namespace lwcli { namespace view
           ui_(),
           major_(major),
           minor_(minor)
+      {}
+
+      static void set_ui(std::shared_ptr<subaccount_> self)
       {
-        buttons_ = ftxui::Container::Horizontal({
-          ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
-          ftxui::Button(_("Save"), [this] () {
-            wal_->setSubaddressLabel(major_, minor_, subaccount_name_);
-            throw event::close{};
+        if (!self)
+          return;
+
+        const std::weak_ptr<subaccount_> weak{self};
+        self->buttons_ = ftxui::Container::Horizontal({
+          ftxui::Button(_("Cancel"), [] () { event::send(event::close()); }, ascii()),
+          ftxui::Button(_("Save"), [weak] () {
+            if (auto self = weak.lock(); self)
+              self->wal_->setSubaddressLabel(self->major_, self->minor_, self->subaccount_name_);
+            event::send(event::close());
           }, ascii())
         }); 
 
-        ui_ = ftxui::Container::Vertical({buttons_, name_});
-        Add(ui_);
+        self->ui_ = ftxui::Container::Vertical({self->buttons_, self->name_});
+        self->Add(self->ui_);
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        if (event == ftxui::Event::CtrlQ)
-          throw event::close{};
-        ui_->OnEvent(std::move(event));
+        if (evt == event::close())
+          return false;
+        ui_->OnEvent(std::move(evt));
         return true;
       }
 
@@ -152,7 +160,9 @@ namespace lwcli { namespace view
 
     ftxui::Component subaccount(std::shared_ptr<Monero::Wallet> wal, std::uint32_t major, std::uint32_t minor)
     {
-      return std::make_shared<subaccount_>(std::move(wal), major, minor);
+      auto self = std::make_shared<subaccount_>(std::move(wal), major, minor);
+      subaccount_::set_ui(self);
+      return self;
     }
 
     class account_detail final : public ftxui::ComponentBase
@@ -203,23 +213,34 @@ namespace lwcli { namespace view
         if (std::numeric_limits<std::uint32_t>::max() < id_)
           throw std::runtime_error{"lwcli::account_detail given invalid id"};
 
-        buttons_ = ftxui::Container::Horizontal({
-          ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
-          ftxui::Button(_("Save"), [this] () {
-            wal_->setSubaddressLabel(id_, 0, account_name_);
-            throw event::close{};
-          }, ascii()),
-          ftxui::Button(_("Add Subaddress"), [this] () { acct_->addRow(id_, std::string{}); }, ascii())
-        });
- 
         table_ = component::table(
           {_("#"), _("Label"), _("Address")},
           [this] () { return subaddress_list(); },
           [this] (ftxui::Event e, std::size_t i) { return display_details(e, i); }
         );
+      }
 
-        ui_ = ftxui::Container::Vertical({buttons_, name_, table_});
-        Add(ui_);
+      static void set_ui(std::shared_ptr<account_detail> self)
+      {
+        if (!self)
+          return;
+
+        const std::weak_ptr<account_detail> weak{self};
+        self->buttons_ = ftxui::Container::Horizontal({
+          ftxui::Button(_("Cancel"), [] () { event::send(event::close()); }, ascii()),
+          ftxui::Button(_("Save"), [weak] () {
+            if (auto self = weak.lock(); self)
+              self->wal_->setSubaddressLabel(self->id_, 0, self->account_name_);
+            event::send(event::close());
+          }, ascii()),
+          ftxui::Button(_("Add Subaddress"), [weak] () {
+            if (auto self = weak.lock(); self)
+              self->acct_->addRow(self->id_, std::string{});
+          }, ascii())
+        });
+
+        self->ui_ = ftxui::Container::Vertical({self->buttons_, self->name_, self->table_});
+        self->Add(self->ui_);
       }
 
       bool display_details(ftxui::Event& e, const std::size_t index)
@@ -235,24 +256,21 @@ namespace lwcli { namespace view
         return true;
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        try
+        if (details_)
         {
-          if (details_)
-            return details_->OnEvent(std::move(event));
-          else if (event == ftxui::Event::CtrlQ)
-            throw event::close{};
-          ui_->OnEvent(std::move(event));
+          if (!details_->OnEvent(evt) && evt == event::close())
+          {
+            details_->Detach();
+            details_.reset();
+            account_name_ = wal_->getSubaddressLabel(id_, 0);
+          }
         }
-        catch (const event::close&)
-        {
-          if (!details_)
-            throw;
-          details_->Detach();
-          details_.reset();
-          account_name_ = wal_->getSubaddressLabel(id_, 0);
-        }
+        else if (evt == event::close())
+          return false;
+        else
+          ui_->OnEvent(std::move(evt));
         return true;
       }
 
@@ -325,9 +343,9 @@ namespace lwcli { namespace view
       }
 
     public:
-      explicit accounts_(std::shared_ptr<Monero::Wallet>&& wal, std::uint32_t* account)
+      explicit accounts_(std::shared_ptr<Monero::Wallet> wal, std::uint32_t* account)
         : ftxui::ComponentBase(),
-          wal_(std::move(wal)),
+          wal_(wal),
           wal_accounts_(wal_->subaddressAccount()),
           account_(account),
           title_(ftxui::text(_("Accounts"))),
@@ -340,9 +358,9 @@ namespace lwcli { namespace view
           row_map_()
       {
         buttons_ = ftxui::Container::Horizontal({
-          ftxui::Button(_("Close"), [] () { throw event::close{}; }, ascii()),
-          ftxui::Button(_("Add Account"), [this] () {
-            wal_->addSubaddressAccount(std::string{config::default_account_name});
+          ftxui::Button(_("Close"), [] () { event::send(event::close()); }, ascii()),
+          ftxui::Button(_("Add Account"), [wal] () {
+            wal->addSubaddressAccount(std::string{config::default_account_name});
           }, ascii()),
         });
  
@@ -362,8 +380,10 @@ namespace lwcli { namespace view
         {
           if (details_)
             details_->Detach();
-          details_ = std::make_shared<account_detail>(wal_, wal_->subaddress(), row_map_.at(index));
-          Add(details_);
+          auto details = std::make_shared<account_detail>(wal_, wal_->subaddress(), row_map_.at(index));
+          account_detail::set_ui(details);
+          Add(details);
+          details_ = std::move(details);
           return true;
         }
         else if (e == ftxui::Event::l || e == ftxui::Event::L || event::is_right_click(e))
@@ -374,23 +394,20 @@ namespace lwcli { namespace view
         return false;
       } 
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        try
+        if (details_)
         {
-          if (details_)
-            return details_->OnEvent(std::move(event));
-          else if (event == ftxui::Event::CtrlQ)
-            throw event::close{};
-          ui_->OnEvent(std::move(event));
+          if (!details_->OnEvent(evt) && evt == event::close())
+          {
+            details_->Detach();
+            details_.reset();
+          }
         }
-        catch (const event::close&)
-        {
-          if (!details_)
-            throw;
-          details_->Detach();
-          details_.reset();
-        }
+        else if (evt == event::close())
+          return false;
+        else
+          ui_->OnEvent(std::move(evt));
         return true;
       }
 

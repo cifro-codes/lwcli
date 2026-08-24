@@ -43,6 +43,7 @@
 #include "lwcli_config.h"
 #include "translate.h"
 #include "util.h"
+#include "views/book.h"
 
 namespace lwcli { namespace view
 {
@@ -62,19 +63,10 @@ namespace lwcli { namespace view
     }
 
     ftxui::ButtonOption ascii() { return ftxui::ButtonOption::Ascii(); }
-     
-    struct confirmed final : public std::exception
-    {
-      confirmed() noexcept
-        : std::exception()
-      {}
-
-      virtual ~confirmed() noexcept override = default;
-      virtual const char* what() const noexcept override final { return "confirmed send"; }
-    };
 
     class confirm_ final : public ftxui::ComponentBase
     {
+      bool* confirmed_;
       const std::shared_ptr<Monero::PendingTransaction> tx_;
       const ftxui::Element title_;
       ftxui::Element info_;
@@ -89,8 +81,9 @@ namespace lwcli { namespace view
       ftxui::Component ActiveChild() override final { return buttons_; }
 
     public:
-      explicit confirm_(std::shared_ptr<Monero::PendingTransaction>&& tx, dest_group&& dests)
+      explicit confirm_(std::shared_ptr<Monero::PendingTransaction>&& tx, bool* confirmed)
         : ftxui::ComponentBase(),
+          confirmed_(confirmed),
           tx_(std::move(tx)),
           title_(ftxui::text(_("Sending Tx(es)"))),
           info_(),
@@ -100,15 +93,21 @@ namespace lwcli { namespace view
           animation_(0),
           sent_(false),
           closing_(false)
+      {}
+
+      static void set_ui(std::shared_ptr<confirm_> self, dest_group&& dests)
       {
+        if (!self)
+          return;
+
         {
           std::vector<std::vector<ftxui::Element>> grid;
           grid.reserve(dests.first.size() + 3);
 
-          grid.push_back({ftxui::text(_("Sending: ")), ftxui::text(lwsf::displayAmount(tx_->amount()) + " XMR")});
-          grid.push_back({ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(tx_->fee()) + " XMR")});
+          grid.push_back({ftxui::text(_("Sending: ")), ftxui::text(lwsf::displayAmount(self->tx_->amount()) + " XMR")});
+          grid.push_back({ftxui::text(_("Fee: ")), ftxui::text(lwsf::displayAmount(self->tx_->fee()) + " XMR")});
           {
-            std::vector<std::string> ids = tx_->txid();
+            std::vector<std::string> ids = self->tx_->txid();
 
             ftxui::Elements rows;
             rows.reserve(ids.size());
@@ -122,49 +121,51 @@ namespace lwcli { namespace view
           for (std::size_t i = 0; i < dests.first.size(); ++i)
             grid.push_back({ftxui::text(lwsf::displayAmount(dests.second.at(i)) + " XMR to "), ftxui::text(std::move(dests.first.at(i)))});
           
-          info_ = ftxui::gridbox(std::move(grid));
+          self->info_ = ftxui::gridbox(std::move(grid));
         }
-        buttons_ = ftxui::Container::Horizontal({
-          ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
-          ftxui::Button(_("Send/Confirm"), [this] () { send_tx(); }, ascii())
+
+        const std::weak_ptr<confirm_> weak{self};
+        self->buttons_ = ftxui::Container::Horizontal({
+          ftxui::Button(_("Cancel"), [] () { event::send(event::close()); }, ascii()),
+          ftxui::Button(_("Send/Confirm"), [weak] () { send_tx(weak.lock()); }, ascii())
         });
   
-        Add(buttons_);
+        self->Add(self->buttons_);
       }
 
-      void send_tx()
+      static void send_tx(std::shared_ptr<confirm_> self)
       {
         const auto tx_commit = [] (std::shared_ptr<Monero::PendingTransaction> tx)
         {
           return tx->commit();
         };
 
-        sending_ = std::async(std::launch::async, tx_commit, tx_);
+        if (self)
+          self->sending_ = std::async(std::launch::async, tx_commit, self->tx_);
       }
  
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        const bool send_async = event == event::send_async;
-        if (!event.is_mouse() && !send_async)
+        const bool send_async = (evt == event::send_async);
+        if (!evt.is_mouse() && !send_async)
           error_.reset();
 
-        try
+        if (evt == event::close())
         {
-          if (event == ftxui::Event::CtrlQ)
-            throw event::close{};
-          else if (sent_ && send_async)
-            throw confirmed{};
-          else if (closing_ && send_async)
-            throw event::close{};
-          else if (!closing_)
-            buttons_->OnEvent(std::move(event));
-        }
-        catch (const event::close&)
-        {
-          if (!sending_.valid())
-            throw;
           closing_ = true;
+          if (!sending_.valid())
+            return false;
         }
+        else if (send_async)
+        {
+          if (confirmed_)
+            *confirmed_ = sent_;
+          if (!sending_.valid())
+            event::send(event::close());
+        }
+        else if (!closing_)
+          buttons_->OnEvent(std::move(evt));
+
         return true;
       }
 
@@ -184,9 +185,7 @@ namespace lwcli { namespace view
             else
               error_.reset();
 
-            ftxui::ScreenInteractive* const active = ftxui::ScreenInteractive::Active();
-            if (active)
-              active->PostEvent(event::send_async);
+            event::send(event::send_async);
           }
           else
           {
@@ -213,12 +212,14 @@ namespace lwcli { namespace view
       }
     };
 
-    ftxui::Component confirm(std::shared_ptr<Monero::PendingTransaction> tx, dest_group dests)
+    ftxui::Component confirm(std::shared_ptr<Monero::PendingTransaction> tx, dest_group dests, bool* confirm)
     {
-      return std::make_shared<confirm_>(std::move(tx), std::move(dests));
+      auto self = std::make_shared<confirm_>(std::move(tx), confirm);
+      confirm_::set_ui(self, std::move(dests));
+      return self;
     }
 
-    ftxui::Component book(std::shared_ptr<Monero::WalletManager> wm, std::shared_ptr<Monero::Wallet> wal, std::shared_ptr<dest_pair> dest)
+    ftxui::Component book(std::shared_ptr<Monero::Wallet> wal, std::shared_ptr<dest_pair> dest)
     {
       return nullptr; //return std::make_shared<book_>(std::move(wm), std::move(wal), std::move(dest));
     }
@@ -247,6 +248,7 @@ namespace lwcli { namespace view
       std::future<std::tuple<std::shared_ptr<Monero::PendingTransaction>, dest_group, std::string>> tx_;
       const std::uint32_t account_;
       bool closing_;
+      bool confirmed_;
 
       bool Focusable() const override final { return true; }
       ftxui::Component ActiveChild() override final
@@ -284,42 +286,61 @@ namespace lwcli { namespace view
           oa_(),
           tx_(),
           account_(account),
-          closing_(false)
+          closing_(false),
+          confirmed_(false)
+      {}
+
+      static void set_ui(std::shared_ptr<send_> self)
       {
-        buttons_ = ftxui::Container::Horizontal({
-          ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ascii()),
-          ftxui::Button(_("Add Dest"), [this] () { add_dest(); }, ascii()),
-          ftxui::Button(_("Construct Tx"), [this] () { try_construct(); }, ascii())
+        if (!self)
+          return;
+
+        const std::weak_ptr<send_> weak{self};
+        self->buttons_ = ftxui::Container::Horizontal({
+          ftxui::Button(_("Cancel"), [] () { event::send(event::close()); }, ascii()),
+          ftxui::Button(_("Add Dest"), [weak] () { add_dest(weak.lock()); }, ascii()),
+          ftxui::Button(_("Construct Tx"), [weak] () { try_construct(weak.lock()); }, ascii())
         });
 
-        add_dest();
+        add_dest(self);
       }
 
-      void add_dest()
+      static void add_dest(std::shared_ptr<send_> self)
       {
-        dests_.push_back(std::make_shared<std::pair<std::string, std::string>>());
+        if (!self)
+          return;
 
-        const std::shared_ptr<dest_pair> dest = dests_.back();
-        const std::size_t elem = dests_ui_.size();
-        dests_ui_.emplace_back(
-          last_input(&dests_.back()->first),
-          last_input(&dests_.back()->second),
-          ftxui::Button(_("Book"), [this, dest] () { overlay_ = book(wm_, wal_, dest); }, ascii()),
-          ftxui::Button(_("Remove"), [this, elem] () { remove_dest(elem); }, ascii())
+        self->dests_.push_back(std::make_shared<std::pair<std::string, std::string>>());
+
+        const std::weak_ptr<send_> weak{self};
+        const std::shared_ptr<dest_pair> dest = self->dests_.back();
+        const std::size_t elem = self->dests_ui_.size();
+        self->dests_ui_.emplace_back(
+          last_input(&self->dests_.back()->first),
+          last_input(&self->dests_.back()->second),
+          ftxui::Button(_("Book"), [weak, dest] () {
+            if (auto self = weak.lock(); self)
+              self->overlay_ = book(self->wal_, dest);
+          }, ascii()),
+          ftxui::Button(_("Remove"), [weak, elem] () { remove_dest(weak.lock(), elem); }, ascii())
         );
 
-        update_ui();
+        self->update_ui();
       }
 
-      void remove_dest(const std::size_t elem)
+      static void remove_dest(std::shared_ptr<send_> self, const std::size_t elem)
       {
-        dests_ui_.erase(dests_ui_.begin() + elem);
-        dests_.erase(dests_.begin() + elem);
+        if (!self)
+          return;
 
-        for (std::size_t i = 0; i < dests_ui_.size(); ++i)
-          std::get<3>(dests_ui_.at(i)) = ftxui::Button(_("Remove"), [this, i] () { remove_dest(i); }, ascii());
+        self->dests_ui_.erase(self->dests_ui_.begin() + elem);
+        self->dests_.erase(self->dests_.begin() + elem);
 
-        update_ui();
+        const std::weak_ptr<send_> weak{self};
+        for (std::size_t i = 0; i < self->dests_ui_.size(); ++i)
+          std::get<3>(self->dests_ui_.at(i)) = ftxui::Button(_("Remove"), [weak, i] () { remove_dest(weak.lock(), i); }, ascii());
+
+        self->update_ui();
       }
 
       void update_ui()
@@ -335,6 +356,12 @@ namespace lwcli { namespace view
           ui_->Detach();
         ui_ = ftxui::Container::Vertical(std::move(ui));
         Add(ui_);
+      }
+
+      static void try_construct(std::shared_ptr<send_> self)
+      {
+        if (self)
+          return self->try_construct();
       }
 
       void try_construct()
@@ -413,35 +440,37 @@ namespace lwcli { namespace view
         tx_ = std::async(std::launch::async, tx_construct, wal_, std::move(dests), account_, priority_);
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
         const bool is_waiting = oa_.valid() || tx_.valid();
-        try
-        {
-          if (!event.is_mouse() && event != event::send_async)
-            error_.reset();
 
-          if (overlay_)
-            return overlay_->OnEvent(std::move(event));
-          else if (closing_ && event == event::send_async)
-            throw event::close{};
-          else if (event == ftxui::Event::CtrlQ)
-            throw event::close{};
-          else if (!is_waiting)
-            ui_->OnEvent(std::move(event));
-        }
-        catch (const confirmed&)
-        { throw event::close{}; }
-        catch (const event::close&)
+        if (!evt.is_mouse() && evt != event::send_async)
+          error_.reset();
+
+        if (overlay_)
         {
-          if (!overlay_ && !is_waiting)
-            throw;
-          if (overlay_)
+          if (!overlay_->OnEvent(evt) && evt == event::close())
+          {
             overlay_->Detach();
-          else
-            closing_ = true;
-          overlay_.reset();
+            overlay_.reset();
+            if (confirmed_)
+            {
+              closing_ = true;
+              return false;
+            }
+          }
         }
+        else if (evt == event::close())
+        {
+          closing_ = true;
+          if (!is_waiting)
+            return false;
+        }
+        else if (closing_ && evt == event::send_async)
+          return event::send(event::close());
+        else if (!is_waiting)
+          ui_->OnEvent(std::move(evt));
+
         return true;
       }
 
@@ -476,7 +505,7 @@ namespace lwcli { namespace view
             animate = false;
             auto tx = tx_.get();
             if (std::get<0>(tx))
-              overlay_ = confirm(std::move(std::get<0>(tx)), std::move(std::get<1>(tx)));
+              overlay_ = confirm(std::move(std::get<0>(tx)), std::move(std::get<1>(tx)), &confirmed_);
             else
               error_ = ftxui::text(std::move(std::get<2>(tx)));
           }
@@ -490,11 +519,7 @@ namespace lwcli { namespace view
             ftxui::animation::RequestAnimationFrame();
           }
           else
-          {
-            ftxui::ScreenInteractive* const active = ftxui::ScreenInteractive::Active();
-            if (active)
-              active->PostEvent(event::send_async);
-          }
+            event::send(event::send_async);
         }
 
         if (!overlay_)
@@ -553,6 +578,8 @@ namespace lwcli { namespace view
   {
     if (!wal)
       throw std::invalid_argument{"views::send cannot be given nullptr"};
-    return std::make_shared<send_>(std::move(wm), std::move(wal), account);
+    auto self = std::make_shared<send_>(std::move(wm), std::move(wal), account);
+    send_::set_ui(self);
+    return self;
   }
 }} // lwcli // view

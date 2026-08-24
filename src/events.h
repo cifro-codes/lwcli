@@ -33,20 +33,12 @@
 
 namespace lwcli { namespace event
 {
-  //! Thrown when a window should be closed
-  struct close final : public std::exception
-  {
-    close () noexcept
-      : std::exception()
-    {}
-
-    virtual ~close() noexcept override = default;
-    virtual const char* what() const noexcept override final { return "close window"; }
-  };
-
+  inline const ftxui::Event& close() { return ftxui::Event::CtrlQ; }
   extern const ftxui::Event lock_wallet;
   extern const ftxui::Event refresh_wallet;
   extern const ftxui::Event send_async;
+
+  bool send(ftxui::Event evt);
 
   inline bool is_left_click(ftxui::Event& e) noexcept
   { return e.is_mouse() && e.mouse().button == ftxui::Mouse::Left && e.mouse().motion == ftxui::Mouse::Pressed; }

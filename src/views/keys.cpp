@@ -61,7 +61,7 @@ namespace lwcli { namespace view
         : ftxui::ComponentBase(),
           title_(ftxui::text(_("Wallet Info"))),
           wal_(std::move(wal)),
-          ui_(ftxui::Button(_("OK"), [] () { throw event::close{}; }, ftxui::ButtonOption::Ascii())),
+          ui_(ftxui::Button(_("OK"), [] () { event::send(event::close()); }, ftxui::ButtonOption::Ascii())),
           warning_(),
           grid_(),
           seed_(ftxui::hflow(ftxui::paragraph(wal_->seed({}))))
@@ -79,11 +79,11 @@ namespace lwcli { namespace view
         });
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        if (event == ftxui::Event::CtrlQ)
-          throw event::close{};
-        ui_->OnEvent(std::move(event));
+        if (evt == event::close())
+          return false;
+        ui_->OnEvent(std::move(evt));
         return true;
       }
 

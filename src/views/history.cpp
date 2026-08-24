@@ -33,6 +33,7 @@
 #include <ftxui/dom/table.hpp>
 #include <lws_frontend.h>
 #include <map>
+#include <time.h>
 #include <unordered_map>
 
 #include "components/table.h"
@@ -70,13 +71,13 @@ namespace lwcli { namespace view
       bool Focusable() const override final { return true; }
       ftxui::Component ActiveChild() override final { return container_; }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        if (event == event::refresh_wallet)
+        if (evt == event::refresh_wallet)
           return on_refresh(history_->transaction(hash_));
-        else if (event == ftxui::Event::CtrlQ)
-          throw event::close{};
-        return container_->OnEvent(std::move(event));
+        else if (evt == event::close())
+          return false;
+        return container_->OnEvent(std::move(evt));
       }
 
       virtual ftxui::Element OnRender() override final
@@ -187,17 +188,25 @@ namespace lwcli { namespace view
         options.cursor_position = note_.size();
         options.multiline = false;
         note_input_ = ftxui::Input(&note_, std::move(options));
+      }
 
-        buttons_ = ftxui::Container::Horizontal({
-          ftxui::Button(_("Cancel"), [] () { throw event::close{}; }, ftxui::ButtonOption::Ascii()),
-          ftxui::Button(_("OK"), [this] () {
-            history_->setTxNote(hash_, note_);
-            throw event::close{};
+      static void set_ui(std::shared_ptr<tx_details> self)
+      {
+        if (!self)
+          return;
+
+        const std::weak_ptr<tx_details> weak{self};
+        self->buttons_ = ftxui::Container::Horizontal({
+          ftxui::Button(_("Cancel"), [] () { event::send(event::close()); }, ftxui::ButtonOption::Ascii()),
+          ftxui::Button(_("OK"), [weak] () {
+            if (auto self = weak.lock(); self)
+              self->history_->setTxNote(self->hash_, self->note_);
+            event::send(event::close());
           }, ftxui::ButtonOption::Ascii())
         });
 
-        container_ = ftxui::Container::Vertical({buttons_, note_input_});
-        Add(container_);
+        self->container_ = ftxui::Container::Vertical({self->buttons_, self->note_input_});
+        self->Add(self->container_);
       }
     };
 
@@ -279,43 +288,37 @@ namespace lwcli { namespace view
       {
         if (!overlay_ && (e == ftxui::Event::Return || event::is_left_click(e)))
         {
-          overlay_ = std::make_shared<tx_details>(wallet_->history(), row_map_.at(i));
+          auto overlay = std::make_shared<tx_details>(wallet_->history(), row_map_.at(i));
+          tx_details::set_ui(overlay);
+          overlay_ = std::move(overlay);
           Add(overlay_);
           return true;
         }
         return false;
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        try
+        if (evt == event::refresh_wallet)
         {
-          if (event == event::refresh_wallet)
-          {
-            load_history();
-            if (overlay_)
-              overlay_->OnEvent(std::move(event));
-            return true;
-          }
-          else if (overlay_)
-          {
-            overlay_->OnEvent(std::move(event));
-            return true;
-          }
-          else if (event == ftxui::Event::CtrlQ)
-            throw event::close{};
-          else if (event.is_character())
-            return false;
-          else
-            return table_->OnEvent(std::move(event));
+          load_history();
+          if (overlay_)
+            overlay_->OnEvent(std::move(evt));
         }
-        catch (const event::close&)
+        else if (overlay_)
         {
-          if (!overlay_)
-            throw;
-          overlay_->Detach();
-          overlay_.reset();
+          if (!overlay_->OnEvent(evt) && evt == event::close())
+          {
+            overlay_->Detach();
+            overlay_.reset();
+          }
         }
+        else if (evt == event::close())
+          return false;
+        else if (evt.is_character())
+          return false;
+        else
+          return table_->OnEvent(std::move(evt));
         return true;
       }
 

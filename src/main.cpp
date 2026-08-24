@@ -209,7 +209,9 @@ namespace
         sync(),
         notify(),
         shutdown(false)
-    {}
+    {
+      screen.ForceHandleCtrlC(false);
+    }
   };
 
   struct watch_inactivity
@@ -303,8 +305,6 @@ int main(int, const char* argv[])
     const watch_inactivity watch{state, prog.wallet_timeout};
     state.screen.Loop(window);
   }
-  catch (const lwcli::event::close&)
-  {}
   catch (const std::exception& e)
   {
     state.screen.Clear();
@@ -313,5 +313,5 @@ int main(int, const char* argv[])
   }
  
   state.screen.Clear();
-  return EXIT_SUCCESS;  
+  return EXIT_SUCCESS;
 }

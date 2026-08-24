@@ -100,13 +100,15 @@ namespace lwcli { namespace view
       return {data.release(), close_wallet{std::move(wm)}};
     }
 
+    struct start_state;
     struct wallet_base
     {
+      const std::weak_ptr<start_state> state;
       std::string file;
       std::string password;
 
-      wallet_base(std::string default_file)
-        : file(std::move(default_file)), password()
+      wallet_base(std::weak_ptr<start_state> state, std::string default_file)
+        : state(std::move(state)), file(std::move(default_file)), password()
       {}
     };
 
@@ -118,10 +120,25 @@ namespace lwcli { namespace view
       std::string proxy;
       bool ssl;
       bool subaddresses;
+      bool fido2;
 
-      new_wallet(std::string default_file)
-        : wallet_base(std::move(default_file)), confirm(), language(config::default_language), server(config::server::default_url), proxy(), ssl(false), subaddresses(true)
+      new_wallet(std::shared_ptr<start_state> state, std::string default_file)
+        : wallet_base(std::move(state), std::move(default_file)),
+          confirm(),
+          language(config::default_language),
+          server(config::server::default_url),
+          proxy(),
+          ssl(false),
+          subaddresses(true),
+          fido2(false)
       {}
+
+      std::string get_api_password()
+      {
+        if (!fido2)
+          return password;
+        return "";
+      }
 
       void setup(Monero::Wallet& wal)
       {
@@ -141,16 +158,35 @@ namespace lwcli { namespace view
       }
     };
 
-    struct start_state
+    struct manager_state
     {
       const std::shared_ptr<Monero::WalletManager> wm;
-      std::shared_ptr<Monero::Wallet> wal;
+      ftxui::Component wallet;
+
+      explicit manager_state(std::shared_ptr<Monero::WalletManager> src) noexcept
+        : wm(std::move(src)), wallet(nullptr)
+      {}
+    };
+
+    struct start_state
+    {
+      const std::weak_ptr<manager_state> out;
+      std::shared_ptr<Monero::Wallet> temp;
       ftxui::Component overlay;
       std::string error;
 
-      start_state(std::shared_ptr<Monero::WalletManager>&& wm)
-        : wm(std::move(wm)), wal(nullptr), overlay(nullptr), error()
+      explicit start_state(std::weak_ptr<manager_state> out)
+        : out(std::move(out)), temp(nullptr), overlay(nullptr), error()
       {}
+
+      void show_wallet(std::shared_ptr<Monero::Wallet> wal)
+      {
+        // Delay showing wallet if options required overlay
+        if (auto update = out.lock(); update && wal && !overlay)
+          update->wallet = view::wallet(update->wm, std::move(wal));
+        else
+          temp = std::move(wal);
+      }
     };
 
     bool init_wallet(Monero::Wallet& wal, std::string* error)
@@ -174,31 +210,39 @@ namespace lwcli { namespace view
 
     using option_set = std::pair<std::vector<std::pair<ftxui::Element, ftxui::Component>>, ftxui::Component>;
 
-    option_set get_load_options(std::string default_file, start_state* state)
+    option_set get_load_options(std::string default_file, std::shared_ptr<start_state> state)
     {
       struct options
       {
-        start_state* state;
         wallet_base config;
 
-        options(std::string default_file, start_state* state)
-          : state(state), config(std::move(default_file))
+        options(std::string default_file, std::shared_ptr<start_state> state)
+          : config(std::move(state), std::move(default_file))
         {}
       };
-      auto enclosed = std::make_shared<options>(std::move(default_file), state); 
+
+      auto enclosed = std::make_shared<options>(std::move(default_file), std::move(state));
       const auto load_action = [enclosed] () {
+        const auto state = enclosed->config.state.lock();
+        if (!state)
+          return;
+
+        const auto out = state->out.lock();
+        if (!out || !out->wm)
+          return;
+
         auto prepped = prep_wallet(
-          enclosed->state->wm,
-          enclosed->state->wm->openWallet(enclosed->config.file, enclosed->config.password, config::network),
-          &enclosed->state->error
+          out->wm,
+          out->wm->openWallet(enclosed->config.file, enclosed->config.password, config::network),
+          &state->error
         );
         if (prepped)
         {
-          if (init_wallet(*prepped, &enclosed->state->error))
+          if (init_wallet(*prepped, &state->error))
           {
             enclosed->config.password.clear();
             prepped->startRefresh();
-            enclosed->state->wal = prepped;
+            state->show_wallet(std::move(prepped));
           }
         }
       };
@@ -211,57 +255,64 @@ namespace lwcli { namespace view
         ftxui::Button(_("Load"), load_action, ftxui::ButtonOption::Ascii())
       };
     }
-    option_set get_create_options(std::string default_file, start_state* state)
+    option_set get_create_options(std::string default_file, std::shared_ptr<start_state> state)
     {
       struct options
       {
-        start_state* state;
         new_wallet config;
 
-        options(std::string default_file, start_state* state)
-          : state(state), config(std::move(default_file))
+        options(std::string default_file, std::shared_ptr<start_state> state)
+          : config(std::move(state), std::move(default_file))
         {}
       };
-      auto enclosed = std::make_shared<options>(std::move(default_file), state);
+      auto enclosed = std::make_shared<options>(std::move(default_file), std::move(state));
       auto create = ftxui::Button("Create", [enclosed] () {
+        const auto state = enclosed->config.state.lock();
+        if (!state)
+          return;
+
+        const auto out = state->out.lock();
+        if (!out || !out->wm)
+          return;
+
         if (!enclosed->config.file.empty())
         {
           if (enclosed->config.password != enclosed->config.confirm)
           {
-            enclosed->state->error = "Passwords do not match";
+            state->error = _("Passwords do not match");
             return;
           }
           std::error_code ec{};
           if (!std::filesystem::exists(enclosed->config.file, ec))
           {
             auto prepped = prep_wallet(
-              enclosed->state->wm,
-              enclosed->state->wm->createWallet(enclosed->config.file, enclosed->config.password, enclosed->config.language, config::network),
-              &enclosed->state->error
+              out->wm,
+              out->wm->createWallet(enclosed->config.file, enclosed->config.password, enclosed->config.language, config::network),
+              &state->error
             );
             if (prepped)
             {
               if (prepped->store({}))
               {
                 enclosed->config.setup(*prepped);
-                if (init_wallet(*prepped, &enclosed->state->error))
+                if (init_wallet(*prepped, &state->error))
                 {
                   enclosed->config.password.clear();
                   enclosed->config.confirm.clear();
-                  enclosed->state->overlay = view::keys(prepped, true /* show warning */);
+                  state->overlay = view::keys(prepped, true /* show warning */);
                   prepped->startRefresh();
-                  enclosed->state->wal = prepped;
+                  state->show_wallet(std::move(prepped));
                 }
               }
               else
-                enclosed->state->error = "Unable to create file: " + prepped->errorString();
+                state->error = _("Unable to create file: ") + prepped->errorString();
             }
           }
           else
-            enclosed->state->error = "File already exists";
+            state->error = _("File already exists");
         }
         else
-          enclosed->state->error = "Invalid Filename";
+          state->error = _("Invalid Filename");
       }, ftxui::ButtonOption::Ascii());
       return {
         {
@@ -271,37 +322,48 @@ namespace lwcli { namespace view
           {ftxui::text(_("Language: ")), last_input(&enclosed->config.language)},
           {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl), ftxui::Checkbox(_("Subaddresses"), &enclosed->config.subaddresses)})}
+          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({
+              ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl),
+              ftxui::Checkbox(_("Subaddresses "), &enclosed->config.subaddresses),
+              ftxui::Checkbox(_("FIDO2"), &enclosed->config.fido2)
+          })}
         },
         create
       };
     }
-    option_set get_seed_options(std::string default_file, start_state* state)
+    option_set get_seed_options(std::string default_file, std::shared_ptr<start_state> state)
     {
       struct options
       {
-        start_state* state;
         std::string mnemonic;
         std::string height;
         new_wallet config;
 
-        options(std::string default_file, start_state* state)
-          : state(state), mnemonic(), height("0"), config(std::move(default_file))
+        options(std::string default_file, std::shared_ptr<start_state> state)
+          : mnemonic(), height("0"), config(std::move(state), std::move(default_file))
         {}
       };
-      auto enclosed = std::make_shared<options>(std::move(default_file), state);
-      auto recover = ftxui::Button("Recover", [enclosed] () {
+      auto enclosed = std::make_shared<options>(std::move(default_file), std::move(state));
+      auto recover = ftxui::Button(_("Recover"), [enclosed] () {
+        const auto state = enclosed->config.state.lock();
+        if (!state)
+          return;
+
+        const auto out = state->out.lock();
+        if (!out || !out->wm)
+          return;
+
         const auto height = from_string(enclosed->height);
         if (!height)
         {
-          enclosed->state->error = "Invalid Height";
+          state->error = _("Invalid Height");
           return;
         }
         if (!enclosed->config.file.empty())
         {
           if (enclosed->config.password != enclosed->config.confirm)
           {
-            enclosed->state->error = "Passwords do not match";
+            state->error = _("Passwords do not match");
             return;
           }
 
@@ -309,33 +371,33 @@ namespace lwcli { namespace view
           if (!std::filesystem::exists(enclosed->config.file, ec))
           {
             auto prepped = prep_wallet(
-              enclosed->state->wm,
-              enclosed->state->wm->recoveryWallet(enclosed->config.file, enclosed->config.password, enclosed->mnemonic, config::network, *height),
-              &enclosed->state->error
+              out->wm,
+              out->wm->recoveryWallet(enclosed->config.file, enclosed->config.password, enclosed->mnemonic, config::network, *height),
+              &state->error
             );
             if (prepped)
             {
               if (prepped->store({}))
               {
                 enclosed->config.setup(*prepped);
-                if (init_wallet(*prepped, &enclosed->state->error))
+                if (init_wallet(*prepped, &state->error))
                 {
                   enclosed->mnemonic.clear();
                   enclosed->config.password.clear();
                   enclosed->config.confirm.clear();
                   prepped->rescanBlockchainAsync();
-                  enclosed->state->wal = prepped;
+                  state->show_wallet(std::move(prepped));
                 }
               }
               else
-                enclosed->state->error = "Unable to create file: " + prepped->errorString();
+                state->error = _("Unable to create file: ") + prepped->errorString();
             }
           }
           else
-            enclosed->state->error = "File already exists";
+            state->error = _("File already exists");
         }
         else
-          enclosed->state->error = "Invalid Filename";
+          state->error = _("Invalid Filename");
       }, ftxui::ButtonOption::Ascii());
       return {
         {
@@ -346,40 +408,51 @@ namespace lwcli { namespace view
           {ftxui::text(_("Height: ")), last_input(&enclosed->height)},
           {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl), ftxui::Checkbox(_("Subaddresses"), &enclosed->config.subaddresses)})}
+          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({
+              ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl),
+              ftxui::Checkbox(_("Subaddresses "), &enclosed->config.subaddresses),
+              ftxui::Checkbox(_("FIDO2"), &enclosed->config.fido2)
+          })}
         },
         recover
       };
     }
 
-    option_set get_key_options(std::string default_file, start_state* state)
+    option_set get_key_options(std::string default_file, std::shared_ptr<start_state> state)
     {
       struct options
       {
-        start_state* state;
         std::string spend_key;
         std::string view_key;
         std::string address;
         std::string height;
         new_wallet config;
 
-        options(std::string default_file, start_state* state)
-          : state(state), spend_key(), view_key(), address(), height("0"), config(std::move(default_file))
+        options(std::string default_file, std::shared_ptr<start_state> state)
+          : spend_key(), view_key(), address(), height("0"), config(std::move(state), std::move(default_file))
         {}
       };
-      auto enclosed = std::make_shared<options>(std::move(default_file), state);
-      auto recover = ftxui::Button(_("Recover (Broken)"), [enclosed] () {
+      auto enclosed = std::make_shared<options>(std::move(default_file), std::move(state));
+      auto recover = ftxui::Button(_("Recover"), [enclosed] () {
+        const auto state = enclosed->config.state.lock();
+        if (!state)
+          return;
+
+        const auto out = state->out.lock();
+        if (!out || !out->wm)
+          return;
+
         const auto height = from_string(enclosed->height);
         if (!height)
         {
-          enclosed->state->error = "Invalid Height";
+          state->error = _("Invalid Height");
           return;
         }
         if (!enclosed->config.file.empty())
         {
           if (enclosed->config.password != enclosed->config.confirm)
           {
-            enclosed->state->error = "Passwords do not match";
+            state->error = _("Passwords do not match");
             return;
           }
 
@@ -387,8 +460,8 @@ namespace lwcli { namespace view
           if (!std::filesystem::exists(enclosed->config.file, ec))
           {
             auto prepped = prep_wallet(
-              enclosed->state->wm,
-              enclosed->state->wm->createWalletFromKeys(
+              out->wm,
+              out->wm->createWalletFromKeys(
                 enclosed->config.file,
                 enclosed->config.password,
                 enclosed->config.language,
@@ -398,31 +471,31 @@ namespace lwcli { namespace view
                 enclosed->view_key,
                 enclosed->spend_key
               ),
-              &enclosed->state->error
+              &state->error
             );
             if (prepped)
             {
               if (prepped->store({}))
               {
                 enclosed->config.setup(*prepped);
-                if (init_wallet(*prepped, &enclosed->state->error))
+                if (init_wallet(*prepped, &state->error))
                 {
                   enclosed->spend_key.clear();
                   enclosed->config.password.clear();
                   enclosed->config.confirm.clear();
                   prepped->rescanBlockchainAsync();
-                  enclosed->state->wal = prepped;
+                  state->show_wallet(std::move(prepped));
                 }
               }
               else
-                enclosed->state->error = "Unable to create file: " + prepped->errorString();
+                state->error = _("Unable to create file: ") + prepped->errorString();
             }
           }
           else
-            enclosed->state->error = "File already exists";
+            state->error = _("File already exists");
         }
         else
-          enclosed->state->error = "Invalid Filename";
+          state->error = _("Invalid Filename");
       }, ftxui::ButtonOption::Ascii());
       return {
         {
@@ -436,7 +509,11 @@ namespace lwcli { namespace view
           {ftxui::text(_("Language: ")), last_input(&enclosed->config.language)},
           {ftxui::text(_("API Server: ")), last_input(&enclosed->config.server)},
           {ftxui::text(_("Proxy: ")), last_input(&enclosed->config.proxy)},
-          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl), ftxui::Checkbox(_("Subaddresses"), &enclosed->config.subaddresses)})}
+          {ftxui::text(_("Options: ")), ftxui::Container::Horizontal({
+              ftxui::Checkbox(_("TLS/SSL Cert Check "), &enclosed->config.ssl),
+              ftxui::Checkbox(_("Subaddresses "), &enclosed->config.subaddresses),
+              ftxui::Checkbox(_("FIDO2"), &enclosed->config.fido2)
+          })}
         },
         recover
       };
@@ -444,11 +521,10 @@ namespace lwcli { namespace view
     
     class start final : public ftxui::ComponentBase
     {
-      std::shared_ptr<Monero::Wallet>* out_;
       const ftxui::Element title_;
       const ftxui::Element help_;
       const ftxui::Element disclaimer_;
-      start_state state_;
+      const std::shared_ptr<start_state> state_;
       const std::string default_file_;
       const std::vector<std::string> options_;
       int active_;
@@ -461,8 +537,8 @@ namespace lwcli { namespace view
       bool Focusable() const override final { return true; }
       ftxui::Component ActiveChild() override final
       {
-        if (state_.overlay)
-          return state_.overlay; 
+        if (state_->overlay)
+          return state_->overlay;
         return ui_; 
       }
 
@@ -474,12 +550,12 @@ namespace lwcli { namespace view
       }
 
     public:
-      explicit start(std::shared_ptr<Monero::WalletManager> wm, std::string&& file, std::shared_ptr<Monero::Wallet>* out)
-        : out_(out),
-          title_(ftxui::text("wmcli")),
+      explicit start(std::string&& file, std::shared_ptr<manager_state> out)
+        : ftxui::ComponentBase(),
+          title_(ftxui::text("lwcli")),
           help_(decorate::banner(ftxui::text(_("Ctrl-Q to close active window, Ctrl-C close app immediately")))),
           disclaimer_(decorate::banner(ftxui::text(_("Beware of mouse events in Tmux/Screen")))),
-          state_(std::move(wm)),
+          state_(std::make_shared<start_state>(std::move(out))),
           default_file_(std::move(file)),
           options_({_("Load Wallet"), _("Create Wallet"), _("Recover from Seed"), _("Recover from Keys")}),
           active_(-1),
@@ -502,16 +578,16 @@ namespace lwcli { namespace view
           {
             case 0:
             default:
-              std::tie(stack_, completion_) = get_load_options((default_file_.empty() ? get_home() : default_file_), &state_);
-            break;
+              std::tie(stack_, completion_) = get_load_options((default_file_.empty() ? get_home() : default_file_), state_);
+              break;
             case 1:
-              std::tie(stack_, completion_) = get_create_options((default_file_.empty() ? get_home() : default_file_), &state_);
+              std::tie(stack_, completion_) = get_create_options((default_file_.empty() ? get_home() : default_file_), state_);
               break;
             case 2:
-              std::tie(stack_, completion_) = get_seed_options((default_file_.empty() ? get_home() : default_file_), &state_);
+              std::tie(stack_, completion_) = get_seed_options((default_file_.empty() ? get_home() : default_file_), state_);
               break;
             case 3:
-              std::tie(stack_, completion_) = get_key_options((default_file_.empty() ? get_home() : default_file_), &state_);
+              std::tie(stack_, completion_) = get_key_options((default_file_.empty() ? get_home() : default_file_), state_);
               break;
           }
 
@@ -534,43 +610,38 @@ namespace lwcli { namespace view
           }
         }
 
-        // Delay showing wallet if options required overlay
-        if (state_.wal && !state_.overlay)
-        {
-          *out_ = std::move(state_.wal);
-          state_.wal.reset();
-        }
-
         return true;
       }
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        if (!event.is_mouse())
-          state_.error.clear();
+        if (!evt.is_mouse())
+          state_->error.clear();
 
-        try
+        if (evt == event::lock_wallet)
+          state_->error = _("Wallet locked due to inactivity");
+        else if (state_->overlay)
         {
-          if (event == event::lock_wallet)
-            state_.error = _("Wallet Locked Due to Inactivity");
-          else if (state_.overlay)
-            return state_.overlay->OnEvent(std::move(event));
-          else if (event == ftxui::Event::CtrlQ)
-            throw event::close{};
-          else if (ui_->OnEvent(std::move(event)))
-            return update_ui();
-        }
-        catch (const event::close&)
-        {
-          if (state_.overlay)
+          if (state_->overlay->OnEvent(evt))
+            return true;
+          else if (evt == event::close())
           {
-            state_.overlay.reset();
-            *out_ = std::move(state_.wal);
-            state_.wal.reset();
+            std::shared_ptr<Monero::Wallet> wal;
+            state_->temp.swap(wal);
+
+            state_->overlay->Detach();
+            state_->overlay.reset();
+
+            if (wal)
+              state_->show_wallet(std::move(wal));
             return true;
           }
-          throw;
         }
+        else if (evt == event::close())
+          return false;
+        else if (ui_->OnEvent(std::move(evt)))
+          return update_ui();
+
         return false;
       }
 
@@ -594,72 +665,66 @@ namespace lwcli { namespace view
           ftxui::separator(),
           decorate::banner(completion_->Render())
         };
-        if (!state_.error.empty())
-          out[7] = ftxui::inverted(decorate::banner(ftxui::text(state_.error)));
+        if (!state_->error.empty())
+          out[7] = ftxui::inverted(decorate::banner(ftxui::text(state_->error)));
 
         const auto base = ftxui::hcenter(ftxui::xflex_grow(ftxui::vbox(std::move(out)))); 
-        if (state_.overlay)
-          return ftxui::dbox(base, decorate::overlay(state_.overlay->Render()));
+        if (state_->overlay)
+          return ftxui::dbox(base, decorate::overlay(state_->overlay->Render()));
         return base;
       }
     };
 
     class manager_ final : public ftxui::ComponentBase
     {
-      const std::shared_ptr<Monero::WalletManager> wm_;
-      std::shared_ptr<Monero::Wallet> data_;
+      const std::shared_ptr<manager_state> state_;
       const ftxui::Component start_;
-      ftxui::Component wallet_;
 
       bool Focusable() const override final { return true; }
       ftxui::Component ActiveChild() override final
       {
-        if (wallet_)
-          return wallet_;
+        if (state_->wallet)
+          return state_->wallet;
         return start_;
       }
 
     public:
       explicit manager_(std::shared_ptr<Monero::WalletManager>&& wm, std::string&& file)
         : ftxui::ComponentBase(),
-          wm_(std::move(wm)),
-          data_(nullptr),
-          start_(std::make_shared<start>(wm_, std::move(file), &data_)),
-          wallet_(nullptr)
+          state_(std::make_shared<manager_state>(std::move(wm))),
+          start_(std::make_shared<start>(std::move(file), state_))
       {}
 
-      bool OnEvent(ftxui::Event event) override final
+      bool OnEvent(ftxui::Event evt) override final
       {
-        try
+        if (state_->wallet)
         {
-          if (wallet_)
+          bool detach = false;
+          if (evt == event::lock_wallet)
           {
-            if (event == event::lock_wallet)
-            {
-              wallet_.reset();
-              start_->OnEvent(std::move(event));
-            }
-            else
-              return wallet_->OnEvent(std::move(event));
+            start_->OnEvent(std::move(evt));
+            detach = true;
           }
-          else if (event != event::lock_wallet && start_->OnEvent(std::move(event)) && data_)
-            wallet_ = view::wallet(wm_, std::move(data_));
-          data_.reset();
+          else if (!state_->wallet->OnEvent(evt) && evt == event::close())
+            detach = true;
+
+          if (detach)
+          {
+            state_->wallet->Detach();
+            state_->wallet.reset();
+          }
+          return true;
         }
-        catch (const event::close&)
-        {
-          if (!wallet_)
-            throw;
-          data_.reset();
-          wallet_.reset();
-        }
+        else if (!start_->OnEvent(evt) && evt == event::close())
+          return false;
+
         return true;
       }
 
       ftxui::Element OnRender() override final
       {
-        if (wallet_)
-          return wallet_->Render();
+        if (state_->wallet)
+          return state_->wallet->Render();
         return start_->Render();
       }
     };
