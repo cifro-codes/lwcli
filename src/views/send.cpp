@@ -141,7 +141,10 @@ namespace lwcli { namespace view
         };
 
         if (self)
+        {
+          self->closing_ = true;
           self->sending_ = std::async(std::launch::async, tx_commit, self->tx_);
+        }
       }
  
       bool OnEvent(ftxui::Event evt) override final
@@ -156,7 +159,7 @@ namespace lwcli { namespace view
           if (!sending_.valid())
             return false;
         }
-        else if (send_async)
+        else if (send_async && closing_)
         {
           if (confirmed_)
             *confirmed_ = sent_;
