@@ -370,11 +370,30 @@ namespace lwcli { namespace view
           std::error_code ec{};
           if (!std::filesystem::exists(enclosed->config.file, ec))
           {
-            auto prepped = prep_wallet(
-              out->wm,
-              out->wm->recoveryWallet(enclosed->config.file, enclosed->config.password, enclosed->mnemonic, config::network, *height),
-              &state->error
-            );
+
+            std::shared_ptr<Monero::Wallet> prepped{};
+            const std::string& file = enclosed->config.file;
+            const std::string& password = enclosed->config.password;
+            const std::string& mnemonic = enclosed->mnemonic;
+            const std::size_t words = std::count(mnemonic.begin(), mnemonic.end(), u8' ');
+
+            if (20 < words)
+            {
+              prepped = prep_wallet(
+                out->wm,
+                out->wm->recoveryWallet(file, password, mnemonic, config::network, *height),
+                &state->error
+              );
+            }
+            else
+            {
+              prepped = prep_wallet(
+                out->wm,
+                out->wm->createWalletFromPolyseed(file, password, config::network, mnemonic, "", false, *height),
+                &state->error
+              );
+            }
+
             if (prepped)
             {
               if (prepped->store({}))
