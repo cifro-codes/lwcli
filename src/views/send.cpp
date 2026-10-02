@@ -49,7 +49,6 @@ namespace lwcli { namespace view
 {
   namespace
   {
-    using dest_pair = std::pair<std::string, std::string>;
     using dest_group = std::pair<std::vector<std::string>, std::vector<std::uint64_t>>;
 
     constexpr const std::array<char, 4> spinner{{'|', '/', '-', '\\'}};
@@ -222,11 +221,6 @@ namespace lwcli { namespace view
       return self;
     }
 
-    ftxui::Component book(std::shared_ptr<Monero::Wallet> wal, std::shared_ptr<dest_pair> dest)
-    {
-      return nullptr; //return std::make_shared<book_>(std::move(wm), std::move(wal), std::move(dest));
-    }
-
     class send_ final : public ftxui::ComponentBase
     {
       using buttons_tuple =
@@ -323,7 +317,7 @@ namespace lwcli { namespace view
           last_input(&self->dests_.back()->second),
           ftxui::Button(_("Book"), [weak, dest] () {
             if (auto self = weak.lock(); self)
-              self->overlay_ = book(self->wal_, dest);
+              self->overlay_ = book(self->wm_, self->wal_, dest);
           }, ascii()),
           ftxui::Button(_("Remove"), [weak, elem] () { remove_dest(weak.lock(), elem); }, ascii())
         );
