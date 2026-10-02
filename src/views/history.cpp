@@ -33,8 +33,11 @@
 #include <ftxui/dom/table.hpp>
 #include <lws_frontend.h>
 #include <map>
+#include <string>
 #include <time.h>
+#include <tuple>
 #include <unordered_map>
+#include <utility>
 
 #include "components/table.h"
 #include "decorate/overlay.h"
@@ -59,17 +62,39 @@ namespace lwcli { namespace view
 
     class tx_details final : public ftxui::ComponentBase
     {
+      using known_transfer = std::tuple<ftxui::Element, ftxui::Component>;
+      using transfer_list =
+        std::pair<std::vector<known_transfer>, std::vector<ftxui::Element>>;
+
       Monero::TransactionHistory* const history_;
       Monero::TransactionInfo const* info_;
       std::string note_;
       std::string hash_;
-      std::vector<Monero::TransactionInfo::Transfer> transfers_;
+      const std::unordered_map<std::string, std::string> book_;
+      transfer_list transfers_;
       ftxui::Component note_input_;
       ftxui::Component buttons_;
       ftxui::Component container_;
 
       bool Focusable() const override final { return true; }
       ftxui::Component ActiveChild() override final { return container_; }
+
+      void set_container()
+      {
+        std::vector<ftxui::Component> all;
+        all.reserve(transfers_.first.size() + 2);
+        if (buttons_)
+          all.push_back(buttons_);
+        if (note_input_)
+          all.push_back(note_input_);
+        for (const auto& transfer : transfers_.first)
+          all.push_back(std::get<1>(transfer));
+
+        if (container_)
+          container_->Detach();
+        container_ = ftxui::Container::Vertical(std::move(all));
+        Add(container_);
+      }
 
       bool OnEvent(ftxui::Event evt) override final
       {
@@ -131,17 +156,23 @@ namespace lwcli { namespace view
         };
 
         const std::size_t base_size = grid.size();
-        for (const auto& transfer : info_->transfers())
+        for (const auto& transfer : transfers_.first)
         {
-          const std::string address = transfer.address.empty() ? 
-            std::string{_(" to Unknown Address")} : _(" to ")  + transfer.address;
           std::string text;
           if (base_size == grid.size())
             text = _("Transfers: ");
           grid.push_back({
             ftxui::text(std::move(text)),
-            ftxui::text(lwsf::displayAmount(transfer.amount) + address)
+            ftxui::hbox({std::get<0>(transfer), std::get<1>(transfer)->Render()})
           });
+        }
+
+        for (const auto& transfer : transfers_.second)
+        {
+          std::string text;
+          if (base_size == grid.size())
+            text = _("Transfers: ");
+          grid.push_back({ftxui::text(std::move(text)), transfer});
         }
 
         ftxui::Elements vertical;
@@ -160,18 +191,68 @@ namespace lwcli { namespace view
         return ftxui::window(ftxui::text(_("Tx ") + hash_), ftxui::vbox(std::move(vertical)));
       }
 
+      static std::unordered_map<std::string, std::string> get_book(Monero::AddressBook* const book)
+      {
+        std::unordered_map<std::string, std::string> out;
+        if (!book)
+          return out;
+
+        book->refresh();
+        for (Monero::AddressBookRow const* const row : book->getAll())
+          if (row)
+            out[row->getAddress()] = row->getDescription();
+        return out;
+      }
+
       bool on_refresh(const Monero::TransactionInfo* info)
       {
         info_ = info;
+        if (!info_)
+          return false;
+
+        const auto known_button = [] (const Monero::TransactionInfo::Transfer& transfer, const std::pair<std::string, std::string>& index)
+        {
+          using known_address =
+            std::tuple<const std::string, const std::string, std::string, unsigned>;
+          const auto known = std::make_shared<known_address>(index.first, index.second, index.second, 1);
+          auto change = [known] ()
+          {
+            unsigned& toggle = std::get<3>(*known);
+            toggle = (toggle + 1) % 2;
+            std::get<2>(*known) = toggle ? std::get<1>(*known) : std::get<0>(*known);
+          };
+
+          return ftxui::Button(&std::get<2>(*known), std::move(change), ftxui::ButtonOption::Ascii());
+        };
+
+        const auto unknown_text = [] (const std::string& address) -> std::string
+        {
+          return address.empty() ?
+            std::string{_( " to unknown address")} : _(" to ") + address;
+        };
+
+        transfers_.first.clear();
+        transfers_.second.clear();
+        for (const auto& transfer : info_->transfers())
+        {
+          const auto known = book_.find(transfer.address);
+          if (known != book_.end())
+            transfers_.first.emplace_back(ftxui::text(lwsf::displayAmount(transfer.amount) + _(" to ")), known_button(transfer, *known));
+          else
+            transfers_.second.push_back(ftxui::text(lwsf::displayAmount(transfer.amount) + unknown_text(transfer.address)));
+        }
+
+        set_container();
         return true;
       }
 
     public:
-      explicit tx_details(Monero::TransactionHistory* history, const Monero::TransactionInfo* info)
+      explicit tx_details(Monero::TransactionHistory* history, const Monero::TransactionInfo* info, Monero::AddressBook* const book)
         : history_(history),
           info_(nullptr),
           note_(),
           hash_(),
+          book_(get_book(book)),
           transfers_(),
           note_input_(nullptr),
           buttons_(),
@@ -205,8 +286,7 @@ namespace lwcli { namespace view
           }, ftxui::ButtonOption::Ascii())
         });
 
-        self->container_ = ftxui::Container::Vertical({self->buttons_, self->note_input_});
-        self->Add(self->container_);
+        self->set_container();
       }
     };
 
@@ -288,7 +368,7 @@ namespace lwcli { namespace view
       {
         if (!overlay_ && (e == ftxui::Event::Return || event::is_left_click(e)))
         {
-          auto overlay = std::make_shared<tx_details>(wallet_->history(), row_map_.at(i));
+          auto overlay = std::make_shared<tx_details>(wallet_->history(), row_map_.at(i), wallet_->addressBook());
           tx_details::set_ui(overlay);
           overlay_ = std::move(overlay);
           Add(overlay_);
